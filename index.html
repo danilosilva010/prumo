@@ -129,6 +129,7 @@ html[data-leitor="1"] [data-act="metnova"],html[data-leitor="1"] [data-act="mete
 html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpos"],html[data-leitor="1"] [data-act="salvaragora"],html[data-leitor="1"] nav.tabs [data-v="imp"],html[data-leitor="1"] nav.tabs [data-v="cfg"]{display:none}
 /* celular: respeita a área segura do iPhone (barra inferior) */
 @media (max-width:760px){nav.tabs{padding-bottom:calc(4px + env(safe-area-inset-bottom,0px))}main{padding-bottom:calc(90px + env(safe-area-inset-bottom,0px))}}
+@media (max-width:760px){main{padding-bottom:calc(var(--navh,90px) + 16px)}}
 </style><meta name="theme-color" content="#28546A"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Prumo"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="apple-touch-icon.png"><link rel="icon" type="image/png" href="icon-192.png"></head>
 <body><div id="app"></div><dialog id="dlg"></dialog>
 <script>/* Prumo — núcleo de regras (sem DOM). */
@@ -1441,6 +1442,14 @@ html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpo
 
   /* ---- arquivo único (qualquer navegador) ---- */
   Store.bundle = db => ({ config: db.config, cadastros: db.cadastros, planos: db.planos, metas: db.metas || { metas: [] }, ativos: db.ativos || { ativos: [], posicoes: [] }, lancamentos: db.lancamentos, importacoes: db.importacoes || [] });
+  /* cópia opcional dos dados neste aparelho (celular): IndexedDB do navegador; preferência em localStorage (liga/desliga) */
+  const idbCopia = () => new Promise((ok, er) => { const r = indexedDB.open('prumo-copia', 1); r.onupgradeneeded = () => r.result.createObjectStore('k'); r.onsuccess = () => ok(r.result); r.onerror = () => er(r.error); });
+  const reqP = r => new Promise((ok, er) => { r.onsuccess = () => ok(r.result); r.onerror = () => er(r.error); });
+  Store.copiaAtiva = () => { try { return localStorage.getItem('prumo-copia') === '1'; } catch (e) { return false; } };
+  Store.copiaAtivar = on => { try { if (on) localStorage.setItem('prumo-copia', '1'); else localStorage.removeItem('prumo-copia'); } catch (e) {} };
+  Store.copiaSalvar = async texto => { const d = await idbCopia(); await reqP(d.transaction('k', 'readwrite').objectStore('k').put({ em: new Date().toISOString(), dados: texto }, 'bundle')); d.close(); };
+  Store.copiaLer = async () => { try { const d = await idbCopia(); const v = await reqP(d.transaction('k').objectStore('k').get('bundle')); d.close(); return v || null; } catch (e) { return null; } };
+  Store.copiaApagar = async () => { try { const d = await idbCopia(); await reqP(d.transaction('k', 'readwrite').objectStore('k').delete('bundle')); d.close(); } catch (e) {} };
   Store.deBundle = o => { if (!o || !o.config || !o.cadastros || !Array.isArray(o.lancamentos)) throw new Error('Arquivo não reconhecido como base do Prumo.'); return Core.reindex({ config: o.config, cadastros: o.cadastros, planos: o.planos || { planos: [], itens: [] }, metas: o.metas || { metas: [] }, ativos: o.ativos || { ativos: [], posicoes: [] }, lancamentos: o.lancamentos, importacoes: o.importacoes || [] }); };
   Store.baixar = async function (db) {
     const txt = JSON.stringify(Store.bundle(db)), nome = 'prumo-dados-' + Core.hoje() + '.json';
@@ -1506,7 +1515,7 @@ html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpo
   function atualizaChip() {
     const el = $('#chip'); if (!el) return;
     if (!db()) return;
-    if (St.leitor) { el.className = 'chip'; el.textContent = '👁 Somente leitura' + (St.nome && St.dir ? ' · ' + St.nome : ''); }
+    if (St.leitor) { el.className = 'chip'; el.textContent = '👁 Somente leitura' + (St.nome && St.dir ? ' · ' + St.nome : '') + (St.copiaDe ? ' · cópia de ' + dtCopia(St.copiaDe) : ''); }
     else if (St.dir) { el.className = 'chip ' + (S.sujos.size ? 'warn' : 'ok'); el.textContent = S.sujos.size ? 'Salvando…' : '✔ Pasta: ' + St.nome + (St.ultimoSave ? ' · ' + St.ultimoSave.toTimeString().slice(0, 5) : ''); }
     else { el.className = 'chip ' + (S.sujos.size ? 'bad' : ''); el.textContent = S.sujos.size ? 'Alterações não exportadas' : 'Base em memória'; }
   }
@@ -1534,7 +1543,17 @@ html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpo
   async function acaoAbrirPasta(leitor) { try { await abrirDir(await St.abrirPasta(leitor)); } catch (e) { if (e.name !== 'AbortError') toast(e.message, 4000); } }
   async function acaoReabrir(leitor) { try { await abrirDir(await St.reabrir(S.lembrada, leitor)); } catch (e) { toast(e.message, 4000); } }
   async function acaoImportar(file, leitor) {
-    try { St.dir = null; St.leitor = !!leitor; iniciar(St.deBundle(JSON.parse(await file.text()))); toast((St.leitor ? 'Arquivo aberto (somente leitura): ' : 'Arquivo importado: ') + db().lancamentos.length + ' lançamentos'); } catch (e) { toast('Falha ao importar: ' + e.message, 5000); }
+    try {
+      const txt = await file.text(); const b = St.deBundle(JSON.parse(txt)); St.dir = null; St.leitor = !!leitor; St.copiaDe = null; iniciar(b);
+      let extra = ''; if (leitor && St.copiaAtiva()) { try { await St.copiaSalvar(txt); S.copiaEm = new Date().toISOString(); St.copiaDe = S.copiaEm; extra = ' · cópia guardada neste aparelho'; } catch (e) { extra = ' · não foi possível guardar a cópia'; } }
+      atualizaChip(); toast((St.leitor ? 'Arquivo aberto (somente leitura): ' : 'Arquivo importado: ') + db().lancamentos.length + ' lançamentos' + extra, 4000);
+    } catch (e) { toast('Falha ao importar: ' + e.message, 5000); }
+  }
+  const dtCopia = em => new Date(em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+  async function acaoAbrirCopia() {
+    try { const c = await St.copiaLer(); if (!c) { S.copiaEm = null; render(); return toast('Não há cópia guardada neste aparelho.', 4000); }
+      St.dir = null; St.leitor = true; iniciar(St.deBundle(JSON.parse(c.dados))); St.copiaDe = c.em; atualizaChip(); toast('Cópia de ' + dtCopia(c.em) + ' (somente leitura). Para ver dados mais novos, use "Trocar/atualizar arquivo".', 5000);
+    } catch (e) { toast('Falha ao abrir a cópia: ' + e.message, 5000); }
   }
 
   /* ---------- gráficos SVG ---------- */
@@ -1579,7 +1598,7 @@ html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpo
     const anos = [...new Set([...db().lancamentos.map(l => +l.data.slice(0, 4)), S.ano])].sort();
     const mostraFiltros = ['inicio', 'rd', 'det', 'pxr', 'plan', 'saldos', 'lan', 'prj', 'met', 'fat', 'inv'].includes(S.tab);
     return `<header class="top"><div class="row"><div class="brand"><i></i>Prumo</div>
-      <nav class="tabs">${tabs.map(([k, n]) => `<button data-act="tab" data-v="${k}" class="${S.tab === k ? 'on' : ''}">${n}</button>`).join('')}</nav><span id="chip" class="chip"></span></div>
+      <nav class="tabs">${tabs.map(([k, n]) => `<button data-act="tab" data-v="${k}" class="${S.tab === k ? 'on' : ''}">${n}</button>`).join('')}</nav><span id="chip" class="chip"></span>${St.leitor ? '<button class="btn alt" data-act="trocar" style="padding:4px 10px;font-size:12px">Trocar/atualizar arquivo</button>' : ''}</div>
       ${mostraFiltros ? `<div class="filters">${S.tab === 'fat' ? '' : `<span>Visão</span><div class="seg">${visoes().map(v => `<button data-act="visao" data-v="${v.id}" class="${S.visao === v.id ? 'on' : ''}">${esc(v.nome)}</button>`).join('')}</div>`}
         <span>Ano</span><select data-bind="ano">${anos.map(a => `<option ${a === S.ano ? 'selected' : ''}>${a}</option>`).join('')}</select>
         <label style="display:flex;gap:5px;align-items:center"><input type="checkbox" data-bind="prev" ${S.prev ? 'checked' : ''}> incluir previstos</label></div>` : ''}</header>`;
@@ -1858,7 +1877,9 @@ html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpo
 
   function welcome() {
     return `<div class="welcome"><h1>Prumo</h1><p class="lbl">Controle financeiro da família — seus dados ficam na sua pasta ou arquivo, não em servidor.</p>
-      ${St.suportaPasta() ? '' : '<label class="btn" style="cursor:pointer">Abrir arquivo do celular (prumo-celular.json)<input type="file" hidden data-bind="importarleitor"></label><p class="lbl">Consulta somente leitura. O arquivo fica na pasta Prumo do seu OneDrive; nada é enviado a servidor.</p>'}
+      ${S.copiaEm ? `<button class="btn" data-act="abrircopia">Abrir cópia guardada (${esc(dtCopia(S.copiaEm))})</button>` : ''}
+      ${St.suportaPasta() ? '' : `<label class="btn${S.copiaEm ? ' alt' : ''}" style="cursor:pointer">${S.copiaEm ? 'Escolher arquivo mais novo' : 'Abrir arquivo do celular (prumo-celular.json)'}<input type="file" hidden data-bind="importarleitor"></label><p class="lbl">Consulta somente leitura. O arquivo fica na pasta Prumo do seu OneDrive; nada é enviado a servidor.</p>`}
+      <label class="lbl" style="display:flex;gap:6px;align-items:flex-start;margin:6px 0"><input type="checkbox" data-bind="copiaflag" ${St.copiaAtiva() ? 'checked' : ''}><span>Guardar uma cópia dos dados <b>neste aparelho</b> para abrir direto, sem escolher o arquivo toda vez. Os dados ficam no navegador do aparelho (use bloqueio de tela). ${S.copiaEm ? `<a href="#" data-act="apagarcopia">Apagar cópia</a>` : ''}</span></label>
       ${S.lembrada ? `<button class="btn" data-act="reabrir">Reabrir a última pasta: ${esc(S.lembrada.name)}</button><button class="btn alt" data-act="reabrirleitor">👁 Reabrir somente leitura</button>` : ''}
       ${St.suportaPasta() ? '<button class="btn' + (S.lembrada ? ' alt' : '') + '" data-act="abrirpasta">Abrir pasta de dados…</button><button class="btn alt" data-act="abrirpastaleitor">👁 Abrir pasta somente leitura…</button>' : ''}
       ${St.suportaPasta() ? '<label class="btn alt" style="cursor:pointer">Abrir arquivo do celular (prumo-celular.json), somente leitura…<input type="file" hidden data-bind="importarleitor"></label>' : ''}
@@ -1870,8 +1891,11 @@ html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpo
   /* ---------- render e eventos ---------- */
   function aplicaTema() { let t = db() && db().config.tema; if (!t) { try { t = localStorage.getItem('prumo-tema'); } catch (e) { } } document.documentElement.dataset.tema = t === 'escuro' ? 'escuro' : 'claro'; document.documentElement.dataset.leitor = St.leitor ? '1' : ''; }
   let _tabAnt = null;
+  /* a barra de abas fica fixa no rodapé do celular: o conteúdo ganha a mesma altura de folga (varia conforme aparelho/fonte) */
+  function ajustaNav() { const n = document.querySelector('nav.tabs'); document.documentElement.style.setProperty('--navh', n && getComputedStyle(n).position === 'fixed' ? n.offsetHeight + 'px' : '0px'); }
+  window.addEventListener('resize', ajustaNav); window.addEventListener('orientationchange', () => setTimeout(ajustaNav, 200));
   function render() {
-    const app = $('#app'); aplicaTema();
+    const app = $('#app'); aplicaTema(); setTimeout(ajustaNav, 0);
     if (!db()) { app.innerHTML = welcome(); return; }
     /* mantém a posição de rolagem da página e das tabelas internas (ex.: importação) entre renderizações da mesma tela */
     const chave = S.tab + '|' + (S.imp && S.imp.modo || ''), scs = chave === _tabAnt ? [...document.querySelectorAll('.scroll')].map(e => [e.scrollTop, e.scrollLeft]) : []; _tabAnt = chave;
@@ -1879,7 +1903,7 @@ html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpo
     if (scs.length) document.querySelectorAll('.scroll').forEach((e, i) => { if (scs[i]) { e.scrollTop = scs[i][0]; e.scrollLeft = scs[i][1]; } });
   }
   /* ---- perfil Leitor: só navegação, filtros e exportação; nada que altere dados ---- */
-  const LEITOR_OK = new Set(['tab', 'visao', 'mes', 'detmes', 'detClasse', 'detVoltar', 'tog', 'saldoHoje', 'pag', 'cad', 'sort', 'exportar', 'lanxlsx', 'recarregar', 'abrirpasta', 'abrirpastaleitor', 'reabrir', 'reabrirleitor', 'vazia',
+  const LEITOR_OK = new Set(['tab', 'visao', 'mes', 'detmes', 'detClasse', 'detVoltar', 'tog', 'saldoHoje', 'pag', 'cad', 'sort', 'exportar', 'lanxlsx', 'recarregar', 'abrirpasta', 'abrirpastaleitor', 'reabrir', 'reabrirleitor', 'vazia', 'trocar', 'abrircopia', 'apagarcopia',
     'plmes', 'plmodo', 'plfmes', 'plfmodo', 'plselplano', 'plsub', 'pltabela', 'pltabmodo', 'pltog', 'prjtog', 'facartao', 'fadiag', 'fairfat', 'famesfat', 'invsel', 'invsub']);
   const LEITOR_BIND_NAO = /^(divpct|importar|imp|impx|plano)/;
   const LEITOR_CFG_OK = new Set(['tema']);
@@ -1913,6 +1937,9 @@ html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpo
     else if (a === 'cadedit') cadEditar(el.dataset.id);
     else if (a === 'divnovo') { modal({ titulo: 'Adicionar mês', campos: [{ k: 'mes', l: 'Mês', t: 'month', req: 1 }, { k: 'pct', l: '% ' + uNome('U1'), t: 'pct', req: 1 }], valores: { mes: C.hoje().slice(0, 7), pct: db().config.pctPadraoU1 }, salvar: o => { if (o.pct == null || o.pct < 0 || o.pct > 1) return ['Percentual inválido.']; const d = db().cadastros.divisaoMensal; if (d.some(x => x.mes === o.mes)) return ['Este mês já existe.']; d.push({ mes: o.mes, pctU1: o.pct }); C.reindex(db()); sujar('cadastros'); render(); return []; } }); }
     else if (a === 'divdel') { const d = db().cadastros.divisaoMensal; d.splice(d.findIndex(x => x.mes === el.dataset.mes), 1); C.reindex(db()); sujar('cadastros'); render(); }
+    else if (a === 'trocar') { St.dir = null; St.copiaDe = null; S.db = null; render(); }
+    else if (a === 'abrircopia') acaoAbrirCopia();
+    else if (a === 'apagarcopia') { ev.preventDefault(); if (confirm('Apagar a cópia dos dados guardada neste aparelho?')) St.copiaApagar().then(() => { S.copiaEm = null; render(); toast('Cópia apagada deste aparelho.', 3000); }); }
     else if (a === 'abrirpasta') acaoAbrirPasta(false);
     else if (a === 'abrirpastaleitor') acaoAbrirPasta(true);
     else if (a === 'reabrir') acaoReabrir(false);
@@ -1929,6 +1956,7 @@ html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpo
     }
     const b = el.dataset.bind; if (!b || /^(fat|prj|met|inv)/.test(b) || ((b.startsWith('imp') && b !== 'importar' && b !== 'importarleitor') || b.startsWith('pl') && b !== 'plano')) return;
     if (b === 'importar') { if (el.files[0]) acaoImportar(el.files[0], false); return; }
+    if (b === 'copiaflag') { if (el.checked) { St.copiaAtivar(true); } else { St.copiaAtivar(false); if (S.copiaEm && confirm('Desligar e apagar a cópia guardada neste aparelho?')) St.copiaApagar().then(() => { S.copiaEm = null; render(); }); else render(); } return; }
     if (b === 'importarleitor') { if (el.files[0]) acaoImportar(el.files[0], true); return; }
     if (b === 'ano') S.ano = +el.value; else if (b === 'prev') S.prev = el.checked; else if (b === 'conta') S.conta = +el.value; else if (b === 'saldoAte') S.saldoAte = el.value || C.hoje();
     else if (b === 'lanq') { S.lan.q = el.value; S.lan.pag = 0; } else if (b === 'lanmes') { S.lan.mes = +el.value; S.lan.pag = 0; } else if (b === 'lanconta') { S.lan.conta = +el.value; S.lan.pag = 0; } else if (b === 'lanclasse') { S.lan.classe = +el.value; S.lan.pag = 0; } else if (b === 'lanstatus') { S.lan.status = el.value; S.lan.pag = 0; }
@@ -2788,6 +2816,6 @@ html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpo
       <div class="dt-grid" style="margin-top:12px"><div class="dt-esq">${principal}<div class="grid g2" style="margin-top:12px">${cartaoRosca('Despesas por Recorrência', r.recorrencia, false, DT_PAL.recorrencia)}${cartaoRosca('Despesas por Necessidade', r.necessidade, false, DT_PAL.necessidade)}</div></div><div class="dt-dir">${tabela}</div></div>`;
   };
   window.Prumo = { S, render, abrirDir, iniciar, VIEWS, atualizarDaPasta, persistir };
-  window.addEventListener('DOMContentLoaded', async () => { render(); S.lembrada = St.suportaPasta() ? await St.lembrada() : null; if (S.lembrada && !db()) render(); });
+  window.addEventListener('DOMContentLoaded', async () => { render(); S.lembrada = St.suportaPasta() ? await St.lembrada() : null; const cp = await St.copiaLer(); S.copiaEm = cp ? cp.em : null; if ((S.lembrada || S.copiaEm) && !db()) render(); });
 })();
 </script><script>if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='127.0.0.1'||location.hostname==='localhost')){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){});});}</script></body></html>
