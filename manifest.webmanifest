@@ -1,0 +1,29 @@
+{
+ "name": "Prumo — finanças da família",
+ "short_name": "Prumo",
+ "lang": "pt-BR",
+ "start_url": "./",
+ "scope": "./",
+ "display": "standalone",
+ "background_color": "#28546A",
+ "theme_color": "#28546A",
+ "description": "Consulta das finanças da família (dados ficam no seu aparelho/OneDrive).",
+ "icons": [
+  {
+   "src": "icon-192.png",
+   "sizes": "192x192",
+   "type": "image/png"
+  },
+  {
+   "src": "icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png"
+  },
+  {
+   "src": "icon-maskable-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "maskable"
+  }
+ ]
+}

@@ -1,0 +1,2 @@
+Estes arquivos são só o CÓDIGO do Prumo. Nunca coloque aqui a pasta PrumoDados nem prumo-celular.json.
+Passo a passo: docs/GUIA_GITHUB_PAGES.md
