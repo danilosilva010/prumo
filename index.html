@@ -11,6 +11,8 @@ header.top{background:var(--dark);color:#fff;position:sticky;top:0;z-index:20;bo
 .brand i{display:inline-block;width:10px;height:22px;border-radius:3px;background:linear-gradient(#9FD0BC,#4C7C69)}
 nav.tabs{display:flex;gap:2px;flex:1;flex-wrap:wrap}
 nav.tabs button{background:transparent;border:0;color:#cfe0e7;padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:600}
+nav.tabs i.sep{width:1px;align-self:stretch;margin:6px 4px;background:#6f93a5;opacity:.6;flex:none}
+nav.tabs button.off{opacity:.4;cursor:not-allowed}nav.tabs button.off:hover{background:transparent}
 nav.tabs button.on{background:#fff;color:var(--dark)}
 nav.tabs button:hover:not(.on){background:#35657c}
 .filters{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#1f4558;padding:6px 16px;color:#cfe0e7;font-size:13px}
@@ -123,7 +125,7 @@ table.mx th.ann{background:var(--dark);color:#fff}
 .dt-li i{width:10px;height:10px;border-radius:3px;display:inline-block}
 .dt-li[data-act]:hover{background:rgba(127,127,127,.12)}
 /* perfil Leitor: esconde o que altera dados */
-html[data-leitor="1"] [data-act="novo"],html[data-leitor="1"] [data-act="cadnovo"],html[data-leitor="1"] [data-act="divnovo"],html[data-leitor="1"] [data-act="divdel"],
+html[data-leitor="1"] [data-act="novo"],html[data-leitor="1"] [data-act="paresLote"],html[data-leitor="1"] [data-act="cadnovo"],html[data-leitor="1"] [data-act="divnovo"],html[data-leitor="1"] [data-act="divdel"],
 html[data-leitor="1"] [data-act="plnovoitem"],html[data-leitor="1"] [data-act="plnovoplano"],html[data-leitor="1"] [data-act="pleditplano"],html[data-leitor="1"] [data-act="plexcluirplano"],html[data-leitor="1"] [data-act="plduplicar"],
 html[data-leitor="1"] [data-act="metnova"],html[data-leitor="1"] [data-act="metedit"],html[data-leitor="1"] [data-act="invnovo"],html[data-leitor="1"] [data-act="invedit"],html[data-leitor="1"] [data-act="invapor"],html[data-leitor="1"] [data-act="invresg"],
 html[data-leitor="1"] [data-act="invimp"],html[data-leitor="1"] [data-act="invpos"],html[data-leitor="1"] [data-act="salvaragora"],html[data-leitor="1"] nav.tabs [data-v="imp"]{display:none}
@@ -160,6 +162,8 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
 #app.anim .bar i,#app.anim .dt-li i{transform-origin:0 50%;animation:a-growx .7s ease-out both}
 #app.anim .dt-rosca svg path,#app.anim .dt-rosca svg circle{transform-origin:100px 100px;animation:a-pop .55s ease-out both}
 }
+
+tr.row.sel td{background:var(--pill)}
 </style><meta name="theme-color" content="#28546A"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Prumo"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="apple-touch-icon.png"><link rel="icon" type="image/png" href="icon-192.png"></head>
 <body><div id="app"></div><dialog id="dlg"></dialog>
 <script>/* Prumo — núcleo de regras (sem DOM). */
@@ -314,6 +318,21 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   };
   Core.listaTags = db => { const s = new Set(); db.lancamentos.forEach(l => { if (l.tag) s.add(l.tag); }); return [...s].sort((a, b) => a.localeCompare(b, 'pt-BR')); };
   Core.listaNotas = db => { const s = new Set(); db.lancamentos.forEach(l => { if (l.nota) s.add(l.nota); }); return [...s].sort((a, b) => a.localeCompare(b, 'pt-BR')); };
+  /* sugestões de par de transferência em lote: saída (<0) × entrada (>0) em contas diferentes, valores opostos (±R$ 0,05), até `dias` dias, ambos sem parId;
+     cada lançamento entra em um só par (menor distância em dias primeiro). unico = nenhum concorrente; marcado = unico e ≤ 5 dias (pré-selecionado). */
+  Core.sugerirPares = function (db, o) {
+    const lim = (o && o.dias) || 20, ls = db.lancamentos.filter(l => !l.parId && Math.abs(l.valor) > 0.005);
+    const dd = (a, b) => Math.abs((new Date(a + 'T12:00:00') - new Date(b + 'T12:00:00')) / 864e5), cents = v => Math.round(Math.abs(v) * 100);
+    const ix = new Map(); ls.filter(l => l.valor > 0).forEach(l => { const k = cents(l.valor); if (!ix.has(k)) ix.set(k, []); ix.get(k).push(l); });
+    const prs = [], nS = new Map(), nE = new Map();
+    ls.filter(l => l.valor < 0).forEach(s => { const c = cents(s.valor); for (let k = c - 5; k <= c + 5; k++) (ix.get(k) || []).forEach(e => {
+      if (e.contaId === s.contaId || Math.abs(e.valor + s.valor) > 0.05) return; const d = dd(e.data, s.data); if (d > lim) return;
+      prs.push({ s, e, dias: d, dv: Math.abs(e.valor + s.valor) }); nS.set(s.id, (nS.get(s.id) || 0) + 1); nE.set(e.id, (nE.get(e.id) || 0) + 1); }); });
+    prs.sort((a, b) => a.dias - b.dias || a.dv - b.dv || a.s.id - b.s.id);
+    const us = new Set(), ue = new Set(), out = [];
+    prs.forEach(p => { if (us.has(p.s.id) || ue.has(p.e.id)) return; us.add(p.s.id); ue.add(p.e.id); const unico = nS.get(p.s.id) === 1 && nE.get(p.e.id) === 1; out.push({ saida: p.s, entrada: p.e, dias: p.dias, unico, marcado: unico && p.dias <= 5 }); });
+    return out.sort((a, b) => (a.saida.data < b.saida.data ? -1 : a.saida.data > b.saida.data ? 1 : a.saida.id - b.saida.id));
+  };
   Core.nextId = list => list.reduce((m, x) => Math.max(m, +x.id || 0), 0) + 1;
   /* lembrete de backup externo: devolve {dias|null, vencido} (lembreteBackupDias; 0 = desligado; base sem lançamentos não cobra) */
   Core.statusBackup = function (db, hoje) {
@@ -483,6 +502,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
 
   /* ---------- análise ---------- */
   /* arquivos: [{ofx, contaId, mesRef}] → linhas com status de duplicidade, sugestão e ação padrão */
+  const PdfM = () => root.PrumoPdf || require('./pdf.js');   /* só usado com arquivos de PDF; carregado sob demanda */
   Imp.analisar = function (db, itens, opts) {
     opts = opts || {}; const tol = db.config.toleranciaDias == null ? 3 : db.config.toleranciaDias; const mem = opts.mem || Imp.memoria(db);
     const porFit = new Map(), semFit = new Map();
@@ -491,6 +511,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
       else (semFit.get(l.contaId) || semFit.set(l.contaId, []).get(l.contaId)).push(l);
     });
     const dias = (a, b) => Math.abs((Date.parse(a) - Date.parse(b)) / 864e5);
+    const usadosPar = new Set(); const todos = new Map(); if (itens.some(it => it.ofx.origem === 'PDF')) db.lancamentos.forEach(l => { (todos.get(l.contaId) || todos.set(l.contaId, []).get(l.contaId)).push(l); });
     const vistos = new Set(), usados = new Set(), rows = [];
     for (const it of itens) {
       const conta = it.contaId ? db._ix.contas.get(it.contaId) : null; const arq = it.ofx;
@@ -499,10 +520,34 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
       for (const l of arq.linhas) {
         const par = Imp.parcela(l.descricao, conta ? conta.tipo === 'Crédito' : arq.cartao);
         const r = { arquivo: arq.arquivo, contaId: it.contaId || null, fitid: l.fitid, dataOfx: l.data, data: l.data, valor: l.valor, descricao: l.descricao, parcela: par, status: null, alvoId: null, motivo: '', foraSeq: false, pago: /pagamento/i.test(l.descricao) && l.valor > 0 };
+        if (arq.origem === 'PDF') { r.origem = 'PDF'; r.statusLan = arq.statusLan || 'Realizado'; r.secao = l.secao || null; }
         if (par && compra) { const dia = +l.data.slice(8, 10); r.data = Imp.addMeses(mesRef + '-01', 0, dia); const esp = Imp.addMeses(l.data, par.n - 1).slice(0, 7); r.foraSeq = esp !== mesRef; }
         const nd = Imp.norm(l.descricao);
         const cls = Imp.classificar(db, mem, l.descricao, conta); r.tag = cls.tag; r.quemId = cls.quemId; r.classeId = cls.classeId; r.subclasseId = cls.subclasseId; r.nivel = cls.nivel; r.n = cls.n; r.k = cls.k;
         if (!conta) { r.status = 'Conta não definida'; rows.push(r); continue; }
+        if (arq.origem === 'PDF') {   /* PDF não traz FITID: duplicidade = mesma conta + mesmo valor + data ±1 dia, com a similaridade da descrição como confiança */
+          if (l.pagamento) r.statusLan = l.data <= C.hoje() ? 'Realizado' : 'Previsto';   /* pagamento já ocorrido não é previsto (a fatura só fica Paga com pagamento Realizado) */
+          const pool = (todos.get(conta.id) || []).filter(e => !usados.has(e.id)); let alvo = null, s = 0;
+          if (par) alvo = pool.find(e => { const pe = e.parcelaN ? { n: e.parcelaN, N: e.parcelaTotal } : Imp.parcela(e.descricao, true); return e.status === 'Previsto' && pe && pe.n === par.n && pe.N === par.N && Math.abs(e.valor - l.valor) <= 0.05 && Imp.base(e.descricao).slice(0, 5) === Imp.base(l.descricao).slice(0, 5); });
+          if (!alvo) { let mel = null; pool.forEach(e => { if (Math.abs(e.valor - l.valor) > 0.005) return; const dd = Math.min(dias(e.data, r.data), dias(e.data, l.data), e.dataOriginal ? dias(e.dataOriginal, l.data) : 99); if (dd > 1) return; const sm = PdfM().simil(e.descricao, l.descricao); if (!mel || sm > mel.sm || (sm === mel.sm && dd < mel.dd)) mel = { e, sm, dd }; }); if (mel) alvo = mel.e; }
+          if (alvo) {
+            s = PdfM().simil(alvo.descricao, l.descricao); usados.add(alvo.id); r.alvoId = alvo.id; r.simil = s; const pct = Math.round(s * 100) + '%';
+            r.status = s >= 0.5 ? 'Possível duplicado' : 'Valor/data coincidem'; r.motivo = 'mesma conta, valor e data (±1 dia); descrição ' + pct + ' parecida (' + (s >= 0.8 ? 'confiança alta' : s >= 0.5 ? 'confiança média' : 'confiança baixa') + ')';
+            if (alvo.status === 'Previsto' && r.statusLan !== 'Previsto') { r.acao = 'Conciliar'; r.motivo += ' · concilia o lançamento previsto'; r.validado = true; }
+            else if (s >= 0.8) { r.acao = 'Ignorar'; r.validado = true; } else { r.acao = 'Revisar'; r.validado = false; }
+          } else {
+            r.status = l.pagamento ? 'Pagamento da fatura' : 'Novo'; r.acao = 'Incluir'; r.validado = r.nivel === 'Alta' && !!r.classeId;
+            if (l.pagamento) {   /* entrada no cartão + saída em outra conta (valor oposto, até 5 dias, sem par) = par de transferência */
+              const cd = db.lancamentos.filter(e => e.contaId !== conta.id && !e.parId && !usadosPar.has(e.id) && e.valor < 0 && Math.abs(e.valor + l.valor) <= 0.05 && dias(e.data, l.data) <= 5).map(e => ({ e, d: dias(e.data, l.data) })).sort((a, b) => a.d - b.d);
+              if (cd.length && (cd.length === 1 || cd[0].d < cd[1].d)) {
+                const e = cd[0].e, kl = db._ix.classes.get(e.classeId); usadosPar.add(e.id); r.parAlvoId = e.id;
+                r.motivo = 'par com a saída de ' + C.brl(-e.valor) + ' em ' + ((db._ix.contas.get(e.contaId) || {}).nome || '—') + ' (' + C.dataBR(e.data) + ')';
+                if (!r.classeId && kl && ['Registro', 'Investimento'].includes(kl.tipo)) { r.quemId = r.quemId || e.quemId; r.classeId = e.classeId; r.subclasseId = e.subclasseId; r.nivel = 'Média'; }
+              } else r.motivo = 'sem saída correspondente na base; vincule depois em Lançamentos (⇄ Par / Sugerir pares)';
+            }
+          }
+          rows.push(r); continue;
+        }
         const exist = l.fitid ? (porFit.get(conta.id + '|' + l.fitid) || []) : [];
         const chaveLote = conta.id + '|' + l.fitid + '|' + (par ? par.n + '/' + par.N : nd);
         const igual = exist.find(e => par ? (() => { const pe = Imp.parcela(e.descricao, true); return pe && pe.n === par.n && pe.N === par.N; })() : Imp.norm(e.descricao) === nd);
@@ -556,7 +601,13 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
 
   /* ---------- conferência de saldo ---------- */
   Imp.conferir = function (db, it, rows) {
-    const arq = it.ofx; if (!arq.saldo) return { tipo: 'sem', msg: 'Arquivo sem saldo' };
+    const arq = it.ofx;
+    if (arq.origem === 'PDF') {   /* total impresso no PDF × soma das linhas de compra */
+      if (arq.totalPdf == null) return { tipo: 'sem', msg: 'Total não encontrado no PDF' };
+      const calc = arq.calculadoPdf != null ? arq.calculadoPdf : C.r2(-arq.linhas.filter(l => !l.pagamento).reduce((s, l) => s + l.valor, 0)), dif = C.r2(calc - arq.totalPdf);
+      return { tipo: 'fatura', ok: Math.abs(dif) < 0.01, esperado: arq.totalPdf, calculado: calc, dif, msg: 'Total no PDF' };
+    }
+    if (!arq.saldo) return { tipo: 'sem', msg: 'Arquivo sem saldo' };
     const conta = db._ix.contas.get(it.contaId); if (!conta) return { tipo: 'sem', msg: 'Defina a conta' };
     if (arq.cartao) {
       const calc = C.r2(arq.linhas.filter(l => !(l.valor > 0 && /pagamento/i.test(l.descricao))).reduce((s, l) => s + l.valor, 0));
@@ -586,11 +637,12 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
         const l = { id: prox++, data: r.data, dataOriginal: r.dataOfx, descricao: r.descricao, tag: r.tag || null, nota: r.nota || null, valor: r.valor, contaId: r.contaId, quemId: r.quemId, classeId: r.classeId, subclasseId: r.subclasseId, pctU1: r.pctU1 != null ? r.pctU1 : null, status: r.statusLan || 'Realizado', origem: r.origem || 'OFX', fitid: r.fitid || null, arquivo: r.arquivo };
         if (r.parcela) { l.parcelaN = r.parcela.n; l.parcelaTotal = r.parcela.N; l.grupoParcelas = grupo(r); }
         db.lancamentos.push(l); novos.push(l); log.criados.push(l.id); r._id = l.id;
+        if (r.parAlvoId) { const o = db.lancamentos.find(x => x.id === r.parAlvoId); if (o && !o.parId) { const pid = Math.min(l.id, o.id); l.parId = pid; o.parId = pid; (log.paresExistentes = log.paresExistentes || []).push(o.id); } }
         if (r.ativoId) { const In = root.PrumoInvest || require('./invest.js'); In.resgateImportado(db, l, r.ativoId, r.rendimento || 0).forEach(id => log.criados.push(id)); }
       } else if (r.acao === 'Conciliar') {
         const a = db.lancamentos.find(x => x.id === r.alvoId); if (!a) continue;
         log.conciliados.push({ id: a.id, antes: JSON.parse(JSON.stringify(a)) });
-        Object.assign(a, { fitid: r.fitid || null, arquivo: r.arquivo, origem: 'OFX', status: 'Realizado', descricao: r.descricao, dataOriginal: r.dataOfx, data: r.data, valor: r.valor });
+        Object.assign(a, { fitid: r.fitid || a.fitid || null, arquivo: r.arquivo, origem: r.origem || 'OFX', status: r.statusLan || 'Realizado', descricao: r.descricao, dataOriginal: r.dataOfx, data: r.data, valor: r.valor });
         if (r.parcela) { a.parcelaN = r.parcela.n; a.parcelaTotal = r.parcela.N; a.grupoParcelas = a.grupoParcelas || grupo(r); }
         if (!a.classeId && r.classeId) { a.classeId = r.classeId; a.subclasseId = r.subclasseId; a.quemId = a.quemId || r.quemId; }
         r._id = a.id; r._base = a;
@@ -621,8 +673,163 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
     db.lancamentos = db.lancamentos.filter(l => !rem.has(l.id));
     (log.conciliados || []).forEach(c => { const a = db.lancamentos.find(x => x.id === c.id); if (a) { Object.keys(a).forEach(k => delete a[k]); Object.assign(a, c.antes); } });
     db.lancamentos.forEach(l => { if (l.parId && rem.has(l.parId)) delete l.parId; });
+    (log.paresExistentes || []).forEach(id => { const o = db.lancamentos.find(x => x.id === id); if (o) delete o.parId; });   /* lançamentos que já existiam e foram pareados pela importação */
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = Imp; else root.PrumoImp = Imp;
+})(typeof window !== 'undefined' ? window : globalThis);
+/* Prumo — importação de faturas em PDF (sem DOM na parte de regras). Cada modelo de fatura tem sua regra; o resultado
+   tem o mesmo formato do OFX (linhas com data/valor/descricao) para reaproveitar duplicidades, classificação e conferência. */
+(function (root) {
+  const C = root.PrumoCore || (typeof require !== 'undefined' ? require('./core.js') : null);
+  const Imp = root.PrumoImp || (typeof require !== 'undefined' ? require('./importacao.js') : null);
+  const P = {};
+  /* Modelos com regra definida. status: 'Funcional' = testado com as amostras listadas; 'Parcial' = há trechos sem amostra */
+  P.MODELOS = [
+    { id: 'nubank-fatura', banco: 'Nubank', modelo: 'Fatura do cartão de crédito', status: 'Funcional', amostras: 3, extras: 'Lê compras, parcelas (Parcela n/N), NuPay e pagamentos; data da parcela = a da cobrança. Confere com o total do titular.', statusLan: 'Realizado', ident: 'nome do titular (aprendida na 1ª vez)' },
+    { id: 'sicoob-fatura', banco: 'Sicoob', modelo: 'Extrato de fatura do cartão de crédito', status: 'Funcional', amostras: 2, extras: 'Lê gastos, parcelas (NN/NN) e pagamento; parcela vai para o dia da compra no mês da fatura (como no OFX). Confere com o TOTAL.', statusLan: 'Realizado', ident: 'Conta Cartão = código da conta no OFX' },
+    { id: 'sicoob-futuros', banco: 'Sicoob', modelo: 'Lançamentos futuros do cartão de crédito', status: 'Parcial', amostras: 1, extras: 'Lê autorizações pendentes e movimentos da próxima fatura (entram como Previsto); a seção "Parcelados com vencimento futuro" ainda não tem amostra com dados. Confere com o Total.', statusLan: 'Previsto', ident: 'final do cartão (aprendido na 1ª vez)' }
+  ];
+  const MES = { JAN: 1, FEV: 2, MAR: 3, ABR: 4, MAI: 5, JUN: 6, JUL: 7, AGO: 8, SET: 9, OUT: 10, NOV: 11, DEZ: 12 };
+  const pad = n => String(n).padStart(2, '0');
+  const dinheiro = s => C.r2(parseFloat(String(s).replace(/\./g, '').replace(',', '.')));
+  const ISO = (y, m, d) => y + '-' + pad(m) + '-' + pad(d);
+  const sinal = s => /^[−\-–]/.test(s) ? -1 : 1;                    /* trata o sinal de menos tipográfico (−) */
+  const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+
+  /* ---------- extração do texto (usa o pdf.js carregado) ---------- */
+  /* junta os pedaços de texto da página em linhas (mesma altura), da esquerda para a direita */
+  P.linhasDaPagina = function (items) {
+    const its = items.filter(i => i.str && i.str.trim()).map(i => ({ s: i.str, x: i.transform[4], y: i.transform[5], w: i.width || 0 })), ls = [];
+    its.sort((a, b) => b.y - a.y || a.x - b.x);
+    its.forEach(i => { let l = ls.find(z => Math.abs(z.y - i.y) <= 2.5); if (!l) { l = { y: i.y, it: [] }; ls.push(l); } l.it.push(i); });
+    ls.sort((a, b) => b.y - a.y);
+    return ls.map(l => { l.it.sort((a, b) => a.x - b.x); let t = '', fim = null; l.it.forEach(i => { if (fim != null && i.x - fim > 1.2 && !/\s$/.test(t)) t += ' '; t += i.s; fim = i.x + i.w; }); return t.replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+  };
+  P.extrair = async function (lib, buf) {
+    const doc = await lib.getDocument({ data: buf instanceof Uint8Array ? buf : new Uint8Array(buf), useSystemFonts: true, verbosity: 0 }).promise, pags = [];
+    for (let i = 1; i <= doc.numPages; i++) { const pg = await doc.getPage(i), tc = await pg.getTextContent(); pags.push(P.linhasDaPagina(tc.items)); }
+    return pags;
+  };
+
+  /* ---------- reconhecimento do modelo ---------- */
+  P.detectar = function (pags) {
+    const t = norm(pags.flat().join(' \n '));
+    if (/SICOOB/.test(t) && /LANCAMENTOS FUTUROS DO CARTAO DE CREDITO/.test(t)) return 'sicoob-futuros';
+    if (/SICOOB/.test(t) && /EXTRATO DE FATURA DE CARTAO DE CREDITO/.test(t)) return 'sicoob-fatura';
+    if (/NU PAGAMENTOS|O NUBANK DECLARA/.test(t) && /RESUMO DA FATURA ATUAL|TRANSACOES DE/.test(t)) return 'nubank-fatura';
+    return null;
+  };
+  const base = (modelo, nome) => ({ arquivo: nome, origem: 'PDF', cartao: true, modelo: modelo.id, banco: modelo.banco, bankId: modelo.banco + ' · PDF', acctId: null, chaves: [], statusLan: modelo.statusLan, dtInicio: null, dtFim: null, saldo: null, totalPdf: null, avisos: [], linhas: [] });
+  const modeloDe = id => P.MODELOS.find(m => m.id === id);
+  const add = (doc, data, valor, descricao, extra) => doc.linhas.push(Object.assign({ fitid: null, data, valor: C.r2(valor), descricao: descricao.replace(/\s+/g, ' ').trim(), tipo: valor > 0 ? 'CREDIT' : 'DEBIT' }, extra || {}));
+
+  /* ---------- Nubank: fatura ---------- */
+  P.parseNubank = function (pags, nome) {
+    const doc = base(modeloDe('nubank-fatura'), nome), L = pags.flat();
+    const mesAno = s => { const m = s.match(/(\d{2}) (JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ) (\d{4})/); return m ? { d: +m[1], m: MES[m[2]], y: +m[3] } : null; };
+    const venc = L.map(l => l.match(/^Data de vencimento: (.+)$/)).filter(Boolean).map(m => mesAno(m[1]))[0] || L.map(l => l.match(/^FATURA (.+?) EMISS/)).filter(Boolean).map(m => mesAno(m[1]))[0];
+    const emis = L.map(l => l.match(/EMISSÃO E ENVIO (.+)$/)).filter(Boolean).map(m => mesAno(m[1]))[0] || venc;
+    if (!emis) { doc.avisos.push('Não achei a data de emissão da fatura.'); return doc; }
+    const ref = ISO(emis.y, emis.m, emis.d), dataDe = (d, m) => { let y = emis.y; if (ISO(y, m, d) > ref) y--; return ISO(y, m, d); };
+    const titular = L.find(l => /^[A-ZÀ-Ú ]{6,}$/.test(l) && !/FATURA|TRANSA|RESUMO|PAGAMENTO/.test(l)); if (titular) doc.chaves.push('nubank:' + norm(titular));
+    doc.dtFim = venc ? ISO(venc.y, venc.m, venc.d) : ref; const per = L.map(l => l.match(/^TRANSAÇÕES DE (\d{2}) (\w{3}) A (\d{2}) (\w{3})/)).filter(Boolean)[0]; if (per && MES[per[2]]) doc.dtInicio = dataDe(+per[1], MES[per[2]]);
+    let sec = 'ini', tot = 0, temTot = false, compras = 0;
+    for (const l of L) {
+      if (/^TRANSAÇÕES DE /.test(l)) { sec = 'compras'; continue; }
+      if (/^Pagamentos( e Financiamentos)?\s+[−\-–]?R\$/.test(l)) { sec = 'pagto'; continue; }
+      if (/^Em cumprimento à regulação/.test(l)) { sec = 'fim'; continue; }
+      if (sec !== 'compras' && sec !== 'pagto') continue;
+      let m = l.match(/^(\d{2}) (JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\s+(.+?)\s+([−\-–]?)R\$\s*([\d.]+,\d{2})$/);
+      if (m) {
+        const data = dataDe(+m[1], MES[m[2]]), v = dinheiro(m[5]) * (m[4] ? -1 : 1); let desc = m[3].replace(/^•{2,}\s*\d{4}\s+/, '');
+        if (sec === 'pagto') { if (/^Saldo restante/i.test(desc)) continue; if (/^Pagamento/i.test(desc)) { add(doc, data, -v, 'Pagamento recebido', { pagamento: true }); continue; }   /* mesma descrição do OFX do Nubank */ doc.avisos.push('Linha em "Pagamentos e Financiamentos" não reconhecida: ' + l); continue; }
+        add(doc, data, -v, desc); compras = C.r2(compras + v); continue;
+      }
+      m = l.match(/^([A-Za-zÀ-ÿ][^R$•]*?)\s+R\$\s*([\d.]+,\d{2})$/);
+      if (m && sec === 'compras' && !/^(Total|Pagamento|Saldo)/i.test(m[1])) { tot = C.r2(tot + dinheiro(m[2])); temTot = true; }
+    }
+    doc.totalPdf = temTot ? tot : null; doc.calculadoPdf = C.r2(compras); if (!doc.linhas.length) doc.avisos.push('Nenhuma transação encontrada.');
+    return doc;
+  };
+
+  /* ---------- Sicoob: extrato de fatura ---------- */
+  P.parseSicoobFatura = function (pags, nome) {
+    const doc = base(modeloDe('sicoob-fatura'), nome), L = pags.flat();
+    const conta = L.map(l => l.match(/^Conta Cartão:\s*(\d+)/)).filter(Boolean)[0]; if (conta) { doc.acctId = conta[1]; doc.chaves.push('sicoob:conta:' + conta[1]); }
+    const v = L.map(l => l.match(/Vencimento:\s*(\d{2})\/(\d{2})\/(\d{4})/)).filter(Boolean)[0]; if (!v) { doc.avisos.push('Não achei o vencimento da fatura.'); return doc; }
+    const ref = ISO(+v[3], +v[2], +v[1]); doc.dtFim = ref;
+    const dataDe = (d, m) => { let y = +v[3]; if (ISO(y, m, d) > ref) y--; return ISO(y, m, d); };
+    let dentro = false, ult = null, compras = 0, tot = null;
+    for (const l of L) {
+      if (/^Movimentos$/.test(l)) { dentro = true; continue; }
+      if (!dentro) continue;
+      let m = l.match(/^TOTAL\s+([\d.]+,\d{2})$/); if (m) { tot = dinheiro(m[1]); dentro = false; continue; }
+      m = l.match(/^GASTOS DE (.+?)\s*\((\d{4})\)/); if (m) { const k = 'final:' + m[2]; if (!doc.chaves.includes('sicoob:' + k)) doc.chaves.push('sicoob:' + k); ult = null; continue; }
+      if (/^-\s*SALDO ANTERIOR/.test(l)) continue;
+      m = l.match(/^(\d{2})\/(\d{2})\s+(.+?)\s+(-?[\d.]+,\d{2})$/);
+      if (m) {
+        const val = dinheiro(m[4]) * sinal(m[4]), pg = /^PAGAMENTO/i.test(m[3]);
+        add(doc, dataDe(+m[1], +m[2]), -val, m[3], pg ? { pagamento: true } : {}); ult = doc.linhas[doc.linhas.length - 1]; if (!pg) compras = C.r2(compras + val); continue;
+      }
+      if (ult && !/^\d{2}\//.test(l) && !/[\d.]+,\d{2}$/.test(l)) { ult.descricao = (ult.descricao + ' ' + l).replace(/\s+/g, ' ').trim(); }   /* descrição longa que quebrou em duas linhas */
+    }
+    doc.totalPdf = tot; doc.calculadoPdf = C.r2(compras); if (!doc.linhas.length) doc.avisos.push('Nenhum movimento encontrado.');
+    return doc;
+  };
+
+  /* ---------- Sicoob: lançamentos futuros ---------- */
+  P.parseSicoobFuturos = function (pags, nome) {
+    const doc = base(modeloDe('sicoob-futuros'), nome), L = pags.flat();
+    const c = L.map(l => l.match(/\*{4}\s+(\d{4})\//)).filter(Boolean)[0]; if (c) doc.chaves.push('sicoob:final:' + c[1]);
+    let sec = null, mov = 0, tot = null, ult = null; const secoes = [[/^AUTORIZAÇÕES PENDENTES/, 'Autorização pendente'], [/^MOVIMENTOS PARA A PRÓXIMA FATURA/, 'Próxima fatura'], [/^PARCELADOS COM VENCIMENTO FUTURO/, 'Parcelado futuro']];
+    for (const l of L) {
+      const s = secoes.find(x => x[0].test(l)); if (s) { sec = s[1]; ult = null; continue; }
+      if (!sec) continue;
+      let m = l.match(/^Total\s+R\$\s*([\d.]+,\d{2})$/); if (m) { tot = dinheiro(m[1]); sec = null; continue; }
+      m = l.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(.+?)\s+(\d{4})\s+(-?)R\$\s*([\d.]+,\d{2})$/);
+      if (m) {
+        const val = dinheiro(m[7]) * (m[6] ? -1 : 1), data = ISO(+m[3], +m[2], +m[1]), pg = /^PAGAMENTO/i.test(m[4]);
+        add(doc, data, -val, m[4].replace(/\*$/, ''), Object.assign({ secao: sec }, pg ? { pagamento: true } : {})); ult = doc.linhas[doc.linhas.length - 1];
+        if (!pg && sec === 'Próxima fatura') mov = C.r2(mov + val); if (sec === 'Parcelado futuro') doc.avisos.push('Seção "Parcelados com vencimento futuro" sem amostra validada: confira as linhas.'); continue;
+      }
+      /* continuação de descrição longa (sem data e sem valor) */
+      if (ult && !/^(Data |Não há|Ouvidoria|\* )/.test(l) && !/[\d.]+,\d{2}$/.test(l) && !/^\d{2}\//.test(l)) ult.descricao = (ult.descricao + ' ' + l).replace(/\s+/g, ' ').trim();
+    }
+    const datas = doc.linhas.map(l => l.data).sort(); doc.dtInicio = datas[0] || null; doc.dtFim = datas[datas.length - 1] || null;
+    doc.totalPdf = tot; doc.calculadoPdf = C.r2(mov); doc.avisos = [...new Set(doc.avisos)];
+    if (!doc.linhas.length) doc.avisos.push('Nenhum lançamento futuro encontrado (não há nada a importar).');
+    return doc;
+  };
+  P.PARSERS = { 'nubank-fatura': P.parseNubank, 'sicoob-fatura': P.parseSicoobFatura, 'sicoob-futuros': P.parseSicoobFuturos };
+  /* pags: linhas por página → documento no formato do OFX; null se o modelo não é suportado */
+  P.parse = function (pags, nome) { const id = P.detectar(pags); return id ? P.PARSERS[id](pags, nome) : null; };
+
+  /* ---------- conta do cartão ---------- */
+  /* 1) chave aprendida (conta.pdfChaves) 2) código do cartão = ofxAcctId 3) única conta de crédito com o nome do banco */
+  P.acharConta = function (db, doc) {
+    const cs = db.cadastros.contas.filter(c => c.status !== 'Inativo');
+    let c = cs.find(x => (x.pdfChaves || []).some(k => doc.chaves.includes(k))); if (c) return c;
+    if (doc.acctId) { c = cs.find(x => x.ofxAcctId === doc.acctId); if (c) return c; }
+    const bn = norm(doc.banco), cand = cs.filter(x => x.tipo === 'Crédito' && norm(x.nome).includes(bn));
+    if (cand.length === 1) return cand[0];
+    const ch = doc.chaves.find(k => /^nubank:/.test(k)), pn = ch ? norm(ch.slice(7)).split(' ')[0] : '';   /* vários cartões do banco: desempata pelo primeiro nome do titular */
+    const por = pn ? cand.filter(x => norm(x.nome).includes(pn)) : []; return por.length === 1 ? por[0] : null;
+  };
+  /* grava na conta as chaves deste PDF para reconhecer sozinha da próxima vez; retorna true se mudou */
+  P.aprender = function (conta, doc) {
+    if (!conta || !doc.chaves.length) return false; const t = conta.pdfChaves || []; const novas = doc.chaves.filter(k => !t.includes(k)); if (!novas.length) return false;
+    conta.pdfChaves = t.concat(novas); return true;
+  };
+
+  /* ---------- similaridade de descrição (0..1) para estimar a confiança da duplicidade ---------- */
+  P.simil = function (a, b) {
+    const x = Imp.norm(Imp.base(a)).replace(/[^a-z0-9 ]/g, ''), y = Imp.norm(Imp.base(b)).replace(/[^a-z0-9 ]/g, '');
+    if (!x || !y) return 0; if (x === y || x.startsWith(y) || y.startsWith(x)) return 1;
+    const bg = s => { const m = new Map(); for (let i = 0; i < s.length - 1; i++) { const k = s.slice(i, i + 2); m.set(k, (m.get(k) || 0) + 1); } return m; };
+    const A = bg(x), B = bg(y); let n = 0; A.forEach((v, k) => { n += Math.min(v, B.get(k) || 0); });
+    return (2 * n) / (Math.max(1, x.length - 1) + Math.max(1, y.length - 1));
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = P; else root.PrumoPdf = P;
 })(typeof window !== 'undefined' ? window : globalThis);
 /* Prumo — importação de lançamentos via Excel/CSV: leitor .xlsx próprio, mapeamento de colunas, validação por linha, duplicidades e template com listas. */
 (function (root) {
@@ -1151,7 +1358,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
     return { itens: grandes.map(i => Object.assign({}, i, { pct: i.valor / tot })), total: C.r2(tot) };
   };
 
-  /* f: { ano, mes, visao, incluirPrev, classeId (drill-down, opcional) } */
+  /* f: { ano, mes, visao, incluirPrev, classeId (drill-down), recorrencia, necessidade (filtros cruzados, opcionais) } */
   D.calcular = function (db, f) {
     const base = { ano: f.ano, mes: f.mes || 0, visao: f.visao || 'todos', incluirPrev: f.incluirPrev, contaId: f.contaId || 0 };
     const r = C.porClasse(db, base, 'Despesa');
@@ -1162,26 +1369,113 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
     const N = anoTodo ? D.mesesComDespesa(db, base) : 0;
     const media = v => (N ? C.r2(v / N) : null);
     const varPct = (v, a) => (a == null || a <= 0 ? null : (v - a) / a);
-    const classes = r.classes.map(c => {
+    const classesAll = r.classes.map(c => {
       const k = db._ix.classes.get(c.classeId) || {};
       return {
         classeId: c.classeId, nome: c.nome, cor: k.cor, valor: c.total, pct: r.total > 0 ? c.total / r.total : 0, media: media(c.total), anterior: mapaAnt.get('c' + c.classeId) || 0, variacao: varPct(c.total, mapaAnt.get('c' + c.classeId)),
         subs: c.subs.map(s => { const sc = db._ix.subclasses.get(s.subclasseId) || {}; return { subclasseId: s.subclasseId, classeId: c.classeId, nome: s.nome, cor: sc.cor || k.cor, necessidade: sc.necessidade || NI, recorrencia: sc.recorrencia || NI, valor: s.total, pct: c.total > 0 ? s.total / c.total : 0, pctTotal: r.total > 0 ? s.total / r.total : 0, media: media(s.total), anterior: mapaAnt.get('s' + s.subclasseId) || 0, variacao: varPct(s.total, mapaAnt.get('s' + s.subclasseId)) }; })
       };
     });
+    /* filtros cruzados (clique nas roscas de Recorrência/Necessidade): só as subclasses com a classificação escolhida */
+    const rec = f.recorrencia || null, nec = f.necessidade || null, filtrado = !!(rec || nec);
+    const okS = (s, igRec, igNec) => (igRec || !rec || s.recorrencia === rec) && (igNec || !nec || s.necessidade === nec);
+    const refaz = (igRec, igNec) => !filtrado ? classesAll : classesAll.map(c => {
+      const subs = c.subs.filter(s => okS(s, igRec, igNec)); if (!subs.length) return null;
+      const v = C.r2(subs.reduce((a, s) => a + s.valor, 0)), ant = C.r2(subs.reduce((a, s) => a + s.anterior, 0));
+      return Object.assign({}, c, { subs, valor: v, anterior: ant, media: media(v), variacao: varPct(v, ant) });
+    }).filter(Boolean);
+    const classes = refaz(false, false);
+    const total = filtrado ? C.r2(classes.reduce((a, c) => a + c.valor, 0)) : r.total;
+    if (filtrado) classes.forEach(c => { c.pct = total > 0 ? c.valor / total : 0; });
+    const totalAnterior = !filtrado ? ra.total : C.r2(ra.classes.flatMap(c => c.subs).filter(s => { const sc = db._ix.subclasses.get(s.subclasseId) || {}; return okS({ recorrencia: sc.recorrencia || NI, necessidade: sc.necessidade || NI }, false, false); }).reduce((a, s) => a + s.total, 0));
     const sel = f.classeId ? classes.find(c => c.classeId === f.classeId) : null;
     const escopo = sel ? [sel] : classes;
     const subsEsc = escopo.flatMap(c => c.subs);
     const totalEsc = C.r2(escopo.reduce((a, c) => a + c.valor, 0));
+    /* cada rosca de classificação ignora o próprio filtro (mostra todas as fatias, a escolhida em destaque) */
+    const subsSem = (igRec, igNec) => { const cl = refaz(igRec, igNec); return (sel ? cl.filter(c => c.classeId === sel.classeId) : cl).flatMap(c => c.subs); };
     const principal = sel ? D.agrupar(sel.subs.map(s => ({ id: s.subclasseId, nome: s.nome, valor: s.valor, cor: s.cor })))
       : D.agrupar(classes.map(c => ({ id: c.classeId, nome: c.nome, valor: c.valor, cor: c.cor })));
-    const por = campo => { const m = new Map(); subsEsc.forEach(s => m.set(s[campo], (m.get(s[campo]) || 0) + s.valor)); return [...m].map(([nome, valor]) => ({ id: nome, nome, valor: C.r2(valor) })); };
+    const por = (campo, ss) => { const m = new Map(); (ss || subsEsc).forEach(s => m.set(s[campo], (m.get(s[campo]) || 0) + s.valor)); return [...m].map(([nome, valor]) => ({ id: nome, nome, valor: C.r2(valor) })); };
     const reembolsos = C.r2(subsEsc.filter(s => s.valor < 0).reduce((a, s) => a + s.valor, 0));
-    return { total: r.total, totalEscopo: totalEsc, classes, sel, principal, recorrencia: D.agrupar(por('recorrencia'), 0), necessidade: D.agrupar(por('necessidade'), 0), reembolsos, meses: N, anterior: ant, totalAnterior: ra.total };
+    return { total, totalGeral: r.total, filtro: { recorrencia: rec, necessidade: nec }, totalEscopo: totalEsc, classes, sel, principal, recorrencia: D.agrupar(por('recorrencia', subsSem(true, false)), 0), necessidade: D.agrupar(por('necessidade', subsSem(false, true)), 0), reembolsos, meses: N, anterior: ant, totalAnterior };
   };
 
   if (typeof module !== 'undefined') module.exports = D;
   root.PrumoDetalhe = D;
+})(typeof window !== 'undefined' ? window : globalThis);
+/* Prumo — Balanço do Casal (sem DOM): quanto cada usuário deve ao outro.
+   Pagador = titular da conta. Despesa (classe tipo Despesa, reembolso pelo sinal) de Quem=outro → o outro deve 100%;
+   Quem=Casal → o outro deve a parte do rateio (lançamento → mês → padrão). Lançamentos com par (parId) são transferências:
+   a saída de uma conta de U1 para uma conta de U2 (ou vice-versa) conta como dinheiro dado ao outro, quitando dívida (qualquer motivo).
+   saldo > 0 = U2 deve a U1; saldo < 0 = U1 deve a U2. Histórico contínuo (acumulado). */
+(function (root) {
+  const C = root.PrumoCore || (typeof require !== 'undefined' ? require('./core.js') : null);
+  const B = {};
+  const US = ['U1', 'U2'];
+  const lado = () => ({ si: 0, casal: 0, outro: 0, deve: 0, env: 0 });   // si/casal/outro = gasto pago; deve = o que o outro lhe deve; env = transferido ao outro
+  const CAMPOS = ['si', 'casal', 'outro', 'deve', 'env'];
+  B.lado = lado;
+  /* efeito de uma despesa: { P pagador, cat 'si'|'outro'|'casal', d valor pago, deve quanto o outro lhe deve } ou null (não conta) */
+  B.efeito = function (db, l) {
+    if (l.parId || C.tipoClasse(db, l) !== 'Despesa') return null;
+    const c = db._ix.contas.get(l.contaId), P = c && US.includes(c.titularId) ? c.titularId : null; if (!P) return null;
+    const q = db._ix.usuarios.get(l.quemId); if (!q) return null;
+    const O = P === 'U1' ? 'U2' : 'U1', d = -l.valor;
+    if (q.id === P) return { P, cat: 'si', d, deve: 0 };
+    if (q.id === O) return { P, cat: 'outro', d, deve: d };
+    if (q.tipo === 'Grupo') { const p = C.pctU1(db, l); return { P, cat: 'casal', d, deve: d * (P === 'U1' ? 1 - p : p) }; }
+    return null;
+  };
+  /* detalhe por classe/subclasse no período. o: { ano, mes (seleção; vazio = ano todo), incluirPrev }.
+     Por classe: u1 = o que U2 deve a U1, u2 = o que U1 deve a U2, liquido = u1 − u2 (positivo: U2 deve a U1). Só despesas (transferências ficam de fora). */
+  B.porClasse = function (db, o) {
+    const inc = !o || o.incluirPrev !== false, ap = String(o.ano), cl = new Map();
+    for (const l of db.lancamentos) {
+      if (!inc && l.status === 'Previsto') continue;
+      if (l.data.slice(0, 4) !== ap || !C.emSel(o.mes, +l.data.slice(5, 7))) continue;
+      const e = B.efeito(db, l); if (!e) continue;
+      let c = cl.get(l.classeId); if (!c) { const k = db._ix.classes.get(l.classeId) || {}; cl.set(l.classeId, c = { classeId: l.classeId, nome: k.nome || '—', cor: k.cor, u1: 0, u2: 0, pago: 0, subs: new Map() }); }
+      let s = c.subs.get(l.subclasseId); if (!s) { const k = db._ix.subclasses.get(l.subclasseId) || {}; c.subs.set(l.subclasseId, s = { subclasseId: l.subclasseId, nome: k.nome || '—', u1: 0, u2: 0, pago: 0 }); }
+      const dv = e.P === 'U1' ? 'u1' : 'u2';
+      c[dv] += e.deve; s[dv] += e.deve; c.pago += e.cat === 'si' ? 0 : e.d; s.pago += e.cat === 'si' ? 0 : e.d;
+    }
+    const fim = x => { x.u1 = C.r2(x.u1); x.u2 = C.r2(x.u2); x.pago = C.r2(x.pago); x.liquido = C.r2(x.u1 - x.u2); return x; };
+    return [...cl.values()].map(c => { c.subs = [...c.subs.values()].map(fim).filter(s => s.u1 || s.u2 || s.pago); return fim(c); }).filter(c => c.u1 || c.u2 || c.pago);
+  };
+  /* o: { incluirPrev } → linhas por mês 'AAAA-MM' (ordem cronológica) com U1, U2, divDesp, transf, saldo (do mês) e acum (histórico contínuo) */
+  B.calcular = function (db, o) {
+    const inc = !o || o.incluirPrev !== false, meses = new Map(), pares = new Map();
+    const mes = k => { let m = meses.get(k); if (!m) { m = { mes: k, U1: lado(), U2: lado() }; meses.set(k, m); } return m; };
+    const tit = id => { const c = db._ix.contas.get(id); return c && US.includes(c.titularId) ? c.titularId : null; };
+    for (const l of db.lancamentos) {
+      if (!inc && l.status === 'Previsto') continue;
+      if (l.parId) { let g = pares.get(l.parId); if (!g) pares.set(l.parId, g = []); g.push(l); continue; }
+      const e = B.efeito(db, l); if (!e) continue;
+      const x = mes(l.data.slice(0, 7))[e.P]; x[e.cat] += e.d; x.deve += e.deve;
+    }
+    for (const g of pares.values()) {
+      const s = g.find(l => l.valor < 0); if (!s) continue;
+      const e = g.find(l => l.valor > 0 && l.contaId !== s.contaId); if (!e) continue;
+      const X = tit(s.contaId), Y = tit(e.contaId); if (!X || !Y || X === Y) continue;
+      mes(s.data.slice(0, 7))[X].env += -s.valor;
+    }
+    let acum = 0;
+    return [...meses.values()].sort((a, b) => a.mes < b.mes ? -1 : 1).map(m => {
+      for (const u of US) for (const k of CAMPOS) m[u][k] = C.r2(m[u][k]);
+      m.divDesp = C.r2(m.U1.deve - m.U2.deve); m.transf = C.r2(m.U1.env - m.U2.env);
+      m.saldo = C.r2(m.divDesp + m.transf); acum = C.r2(acum + m.saldo); m.acum = acum; return m;
+    });
+  };
+  /* soma de linhas (mês, ano ou histórico) */
+  B.soma = function (linhas) {
+    const t = { U1: lado(), U2: lado(), divDesp: 0, transf: 0, saldo: 0 };
+    for (const m of linhas) { for (const u of US) for (const k of CAMPOS) t[u][k] += m[u][k]; t.divDesp += m.divDesp; t.transf += m.transf; t.saldo += m.saldo; }
+    for (const u of US) for (const k of CAMPOS) t[u][k] = C.r2(t[u][k]);
+    t.divDesp = C.r2(t.divDesp); t.transf = C.r2(t.transf); t.saldo = C.r2(t.saldo); return t;
+  };
+  if (typeof module !== 'undefined') module.exports = B;
+  root.PrumoBalanco = B;
 })(typeof window !== 'undefined' ? window : globalThis);
 /* Prumo — investimentos e patrimônio (sem DOM). Ativos vivem dentro de uma conta tipo "Conta investimento".
    Aporte/resgate = lançamentos na conta de investimento com `ativoId` (transferência, não receita/despesa).
@@ -1524,7 +1818,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
 /* Prumo — interface */
 (function () {
   const C = PrumoCore, St = PrumoStore, In = PrumoInvest;
-  const S = { db: null, tab: 'inicio', visao: 'todos', ano: new Date().getFullYear(), mes: [], conta: [], prev: true, saldoAte: C.hoje(), cad: 'contas', lan: { q: '', classe: [], conta: [], status: '', mes: [], pag: 0 }, sujos: new Set(), lembrada: null, aberto: new Set() };
+  const S = { db: null, tab: 'inicio', visao: 'todos', ano: new Date().getFullYear(), mes: [], conta: [], prev: true, saldoAte: C.hoje(), cad: 'contas', lan: { q: '', classe: [], sub: [], conta: [], status: '', mes: [], pag: 0, sel: new Set(), ult: null, pgIds: [] }, sujos: new Set(), lembrada: null, aberto: new Set() };
   const $ = (s, e = document) => e.querySelector(s), $$ = (s, e = document) => [...e.querySelectorAll(s)];
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const aura = (bg, fg, txt, tt) => `<span class="aura" style="background:${esc(bg || '#DDE3E6')};color:${esc(fg || '#33424a')}"${tt ? ' title="' + esc(tt) + '"' : ''}>${esc(txt)}</span>`;
@@ -1652,13 +1946,17 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   S.sort = { lan: { c: 'data', d: -1 }, itens: { c: 'tipo', d: 1 }, fluxo: { c: 'data', d: 1 } };
   const th = (t, c, label, cl) => { const s = S.sort[t]; return `<th class="sortable ${cl || ''}" data-act="sort" data-t="${t}" data-c="${c}">${label}<span class="arr">${s.c === c ? (s.d > 0 ? ' ▲' : ' ▼') : ''}</span></th>`; };
   const ordena = (t, arr, acc) => { const s = S.sort[t], f = acc[s.c] || (() => 0); return [...arr].sort((a, b) => { const x = f(a), y = f(b); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), 'pt-BR', { numeric: true })) * s.d; }); };
+  const MOD_DE = { bal: 'modBal', inv: 'modInv', fat: 'modFat', prj: 'modPrj', met: 'modMet' };   /* módulos opcionais (Configurações › Módulos) */
+  const modOn = m => !m || db().config[m] !== false;
+  const nomeBal = () => 'Balanço ' + ((db().config.apelidoGrupo || '').trim() || 'Casal');
   function header() {
-    const tabs = [['inicio', 'Início'], ['rd', 'Receitas × Despesas'], ['det', 'Detalhamento'], ['pxr', 'Planejado × Realizado'], ['saldos', 'Saldos'], ['inv', 'Investimentos'], ['fat', 'Faturas'], ['prj', 'Projeção'], ['met', 'Metas'], ['lan', 'Lançamentos'], ['imp', 'Importar'], ['plan', 'Planejamento'], ['cad', 'Cadastros'], ['cfg', 'Configurações']];
+    /* grupos: visão geral · planejamento · patrimônio e cartões · dia a dia · sistema */
+    const grupos = [[['inicio', 'Início'], ['rd', 'Receitas × Despesas'], ['det', 'Detalhamento'], ['saldos', 'Saldos']], [['plan', 'Planejamento'], ['pxr', 'Planejado × Realizado'], ['prj', 'Projeção'], ['met', 'Metas']], [['fat', 'Faturas'], ['inv', 'Investimentos'], ['bal', nomeBal()]], [['lan', 'Lançamentos'], ['imp', 'Importar']], [['cad', 'Cadastros'], ['cfg', 'Configurações']]];
     const anos = [...new Set([...db().lancamentos.map(l => +l.data.slice(0, 4)), S.ano])].sort();
-    const mostraFiltros = ['inicio', 'rd', 'det', 'pxr', 'plan', 'saldos', 'lan', 'prj', 'met', 'fat', 'inv'].includes(S.tab);
+    const mostraFiltros = ['inicio', 'rd', 'det', 'pxr', 'plan', 'saldos', 'lan', 'prj', 'met', 'fat', 'inv', 'bal'].includes(S.tab);
     return `<header class="top"><div class="row"><div class="brand"><i></i>Prumo</div>
-      <nav class="tabs">${tabs.map(([k, n]) => `<button data-act="tab" data-v="${k}" class="${S.tab === k ? 'on' : ''}">${n}</button>`).join('')}</nav><span id="chip" class="chip"></span>${St.leitor ? '<button class="btn alt" data-act="trocar" style="padding:4px 10px;font-size:12px">Trocar/atualizar arquivo</button>' : ''}</div>
-      ${mostraFiltros ? `<div class="filters">${S.tab === 'fat' ? '' : `<span>Visão</span><div class="seg">${visoes().map(v => `<button data-act="visao" data-v="${v.id}" class="${S.visao === v.id ? 'on' : ''}">${esc(v.nome)}</button>`).join('')}</div>`}
+      <nav class="tabs">${grupos.map(gr => gr.map(([k, n]) => modOn(MOD_DE[k]) ? `<button data-act="tab" data-v="${k}" class="${S.tab === k ? 'on' : ''}">${esc(n)}</button>` : `<button class="off" disabled title="Módulo desativado em Configurações › Módulos">${esc(n)}</button>`).join('')).join('<i class="sep"></i>')}</nav><span id="chip" class="chip"></span>${St.leitor ? '<button class="btn alt" data-act="trocar" style="padding:4px 10px;font-size:12px">Trocar/atualizar arquivo</button>' : ''}</div>
+      ${mostraFiltros ? `<div class="filters">${S.tab === 'fat' || S.tab === 'bal' ? '' : `<span>Visão</span><div class="seg">${visoes().map(v => `<button data-act="visao" data-v="${v.id}" class="${S.visao === v.id ? 'on' : ''}">${esc(v.nome)}</button>`).join('')}</div>`}
         <span>Ano</span><select data-bind="ano">${anos.map(a => `<option ${a === S.ano ? 'selected' : ''}>${a}</option>`).join('')}</select>
         <label style="display:flex;gap:5px;align-items:center"><input type="checkbox" data-bind="prev" ${S.prev ? 'checked' : ''}> incluir previstos</label></div>` : ''}</header>`;
   }
@@ -1719,6 +2017,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
       if (!C.emSel(S.lan.mes, +l.data.slice(5, 7))) return false;
       if (!S.prev && l.status === 'Previsto') return false;
       if (!C.emSel(S.lan.classe, l.classeId)) return false;
+      if (!C.emSel(S.lan.sub, l.subclasseId)) return false;
       if (!C.emSel(S.lan.conta, l.contaId)) return false;
       if (S.lan.status && l.status !== S.lan.status) return false;
       if (S.visao !== 'todos' && !C.atribuido(db(), l, S.visao)) return false;
@@ -1730,17 +2029,71 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   VIEWS.lan = function () {
     const ls = listaLan(), PG = 100, pags = Math.max(1, Math.ceil(ls.length / PG)); if (S.lan.pag >= pags) S.lan.pag = pags - 1;
     const pg = ls.slice(S.lan.pag * PG, S.lan.pag * PG + PG); const soma = ls.reduce((s, l) => s + l.valor, 0);
-    const u = S.visao !== 'todos';
+    const u = S.visao !== 'todos', cb = !St.leitor;
+    const vis = new Set(ls.map(l => l.id)); S.lan.sel.forEach(id => { if (!vis.has(id)) S.lan.sel.delete(id); });   /* só vale o que está filtrado */
+    S.lan.pgIds = pg.map(l => l.id); const nsel = S.lan.sel.size, todosPg = pg.length && pg.every(l => S.lan.sel.has(l.id));
     return `<h1>Lançamentos — ${S.ano}</h1><div class="tools"><button class="btn" data-act="novo">+ Novo lançamento</button>
       <input type="search" placeholder="Buscar identificação, descrição, FITID…" data-bind="lanq" value="${esc(S.lan.q)}" style="min-width:220px">
-      ${msel('lanmes', 'Todos os meses', C.MESES.map((n, i) => [i + 1, n]))}${msel('lanconta', 'Todas as contas', ordNome(db().cadastros.contas).map(c => [c.id, c.nome]))}${msel('lanclasse', 'Todas as classes', ordNome(db().cadastros.classes).map(c => [c.id, c.nome]))}
+      ${msel('lanmes', 'Todos os meses', C.MESES.map((n, i) => [i + 1, n]))}${msel('lanconta', 'Todas as contas', ordNome(db().cadastros.contas).map(c => [c.id, c.nome]))}${msel('lanclasse', 'Todas as classes', ordNome(db().cadastros.classes).map(c => [c.id, c.nome]))}${msel('lansub', 'Todas as subclasses', ordNome(db().cadastros.subclasses.filter(s => !S.lan.classe.length || S.lan.classe.includes(s.classeId))).map(s => [s.id, (S.lan.classe.length === 1 ? '' : klNome(s.classeId) + ' › ') + s.nome]))}
       <select data-bind="lanstatus"><option value="">Qualquer status</option><option ${S.lan.status === 'Previsto' ? 'selected' : ''}>Previsto</option><option ${S.lan.status === 'Realizado' ? 'selected' : ''}>Realizado</option></select>
-      <button class="btn alt" data-act="lanxlsx" style="margin-left:auto">⤓ Exportar para Excel</button></div>
+      <button class="btn alt" data-act="paresLote" title="Sugere pares de transferência (valor oposto, contas diferentes, até 20 dias)" style="margin-left:auto">⇄ Sugerir pares</button>
+      <button class="btn alt" data-act="lanxlsx">⤓ Exportar para Excel</button></div>
       <div class="lbl" style="margin-bottom:6px">${ls.length} lançamento(s) · soma ${C.brl(soma)} · clique no título de uma coluna para ordenar</div>
-      <div class="card"><div class="scroll"><table><tr>${th('lan', 'data', 'Data')}${th('lan', 'ident', 'Identificação')}${th('lan', 'conta', 'Conta')}${th('lan', 'quem', 'Quem')}${th('lan', 'classe', 'Classe › subclasse')}${th('lan', 'valor', 'Valor', 'n')}${u ? th('lan', 'parte', 'Parte', 'n') : ''}${th('lan', 'status', 'Status')}</tr>
-      ${pg.map(l => `<tr class="row" data-act="edit" data-id="${l.id}" style="cursor:pointer"><td style="white-space:nowrap">${C.dataBR(l.data)}</td><td><div class="ident">${l.parId ? '<span title="Par de transferência" style="opacity:.6">⇄</span> ' : ''}${esc(C.ident(l))}</div>${l.descricao && l.descricao !== C.ident(l) ? `<div class="lbl desc">${esc(l.descricao)}</div>` : ''}</td><td>${aChip(l.contaId)}</td><td>${uChip(l.quemId)}</td><td>${kChip(l.classeId)} <span class="lbl">${esc(sbNome(l.subclasseId))}</span></td><td class="n">${money(l.valor)}</td>${u ? `<td class="n">${money(C.atribuido(db(), l, S.visao))}</td>` : ''}<td><span class="badge ${l.status === 'Previsto' ? 'b-prev' : 'b-real'}">${l.status}</span></td></tr>`).join('') || `<tr><td colspan="8" class="empty">Nenhum lançamento com esses filtros.</td></tr>`}</table></div></div>
+      <div class="card"><div class="scroll"><table><tr>${cb ? `<th style="width:28px"><input type="checkbox" data-act="lanselpg" title="Selecionar todas as linhas desta página" ${todosPg ? 'checked' : ''}></th>` : ''}${th('lan', 'data', 'Data')}${th('lan', 'ident', 'Identificação')}${th('lan', 'conta', 'Conta')}${th('lan', 'quem', 'Quem')}${th('lan', 'classe', 'Classe › subclasse')}${th('lan', 'valor', 'Valor', 'n')}${u ? th('lan', 'parte', 'Parte', 'n') : ''}${th('lan', 'status', 'Status')}</tr>
+      ${pg.map(l => `<tr class="row ${S.lan.sel.has(l.id) ? 'sel' : ''}" data-act="edit" data-id="${l.id}" style="cursor:pointer">${cb ? `<td><input type="checkbox" data-act="lansel" data-id="${l.id}" ${S.lan.sel.has(l.id) ? 'checked' : ''}></td>` : ''}<td style="white-space:nowrap">${C.dataBR(l.data)}</td><td><div class="ident">${l.parId ? '<span title="Par de transferência" style="opacity:.6">⇄</span> ' : ''}${esc(C.ident(l))}</div>${l.descricao && l.descricao !== C.ident(l) ? `<div class="lbl desc">${esc(l.descricao)}</div>` : ''}</td><td>${aChip(l.contaId)}</td><td>${uChip(l.quemId)}</td><td>${kChip(l.classeId)} <span class="lbl">${esc(sbNome(l.subclasseId))}</span></td><td class="n">${money(l.valor)}</td>${u ? `<td class="n">${money(C.atribuido(db(), l, S.visao))}</td>` : ''}<td><span class="badge ${l.status === 'Previsto' ? 'b-prev' : 'b-real'}">${l.status}</span></td></tr>`).join('') || `<tr><td colspan="9" class="empty">Nenhum lançamento com esses filtros.</td></tr>`}</table></div></div>
+      ${cb ? `<div class="tools" style="margin:8px 0" id="lan-lote">${nsel ? `<span class="lbl"><b>${nsel} ${nsel === 1 ? 'linha selecionada' : 'linhas selecionadas'}</b></span><button class="btn sm" data-act="lanlote">✎ Alterar em lote</button><button class="btn red sm" data-act="lanexcl">🗑 Excluir selecionadas</button><button class="btn alt sm" data-act="lanlimpa">Limpar seleção</button>` : ''}${ls.length > nsel ? `<button class="btn alt sm" data-act="lanselall">Selecionar os ${ls.length} filtrados</button>` : ''}</div>` : ''}
       <div class="pager"><button class="btn alt sm" data-act="pag" data-v="-1" ${S.lan.pag ? '' : 'disabled'}>◀</button><span class="lbl">página ${S.lan.pag + 1} de ${pags}</span><button class="btn alt sm" data-act="pag" data-v="1" ${S.lan.pag < pags - 1 ? '' : 'disabled'}>▶</button></div>`;
   };
+  /* ---- seleção e alteração em lote ---- */
+  const anosDeIds = ids => [...new Set(db().lancamentos.filter(l => ids.has(l.id)).map(l => l.data.slice(0, 4)))];
+  document.addEventListener('click', ev => {
+    const el = ev.target.closest('[data-act]'); if (!el) return; const a = el.dataset.act;
+    if (a === 'lansel') {   /* checkbox da linha: um a um; Shift = intervalo desde o último clicado; Ctrl = soma (o próprio checkbox já alterna) */
+      ev.stopPropagation(); const id = +el.dataset.id, on = el.checked, ids = S.lan.pgIds;
+      if (ev.shiftKey && S.lan.ult != null && ids.includes(S.lan.ult)) { const i = ids.indexOf(S.lan.ult), j = ids.indexOf(id); ids.slice(Math.min(i, j), Math.max(i, j) + 1).forEach(x => on ? S.lan.sel.add(x) : S.lan.sel.delete(x)); }
+      else on ? S.lan.sel.add(id) : S.lan.sel.delete(id);
+      S.lan.ult = id; render();
+    } else if (a === 'lanselpg') { ev.stopPropagation(); S.lan.pgIds.forEach(x => el.checked ? S.lan.sel.add(x) : S.lan.sel.delete(x)); render(); }
+    else if (a === 'lanselall') { listaLan().forEach(l => S.lan.sel.add(l.id)); render(); }
+    else if (a === 'lanlimpa') { S.lan.sel.clear(); render(); }
+    else if (a === 'lanexcl') {
+      const ids = new Set(S.lan.sel); if (!ids.size) return;
+      if (!confirm('Excluir definitivamente ' + ids.size + ' lançamento(s)? Esta ação não pode ser desfeita.')) return;
+      const anos = anosDeIds(ids); db().lancamentos = db().lancamentos.filter(l => !ids.has(l.id)); anos.forEach(y => sujar('lan:' + y)); S.lan.sel.clear(); render(); toast(ids.size + ' lançamento(s) excluído(s)');
+    } else if (a === 'lanlote') abrirLote();
+  });
+  function abrirLote() {
+    const ids = new Set(S.lan.sel); if (!ids.size) return; const cd = db().cadastros;
+    const campos = [
+      { k: 'contaId', l: 'Conta', t: 'select', num: 1, opts: cd.contas.filter(c => c.status !== 'Inativo').map(c => [c.id, c.nome]) },
+      { k: 'quemId', l: 'Quem', t: 'select', opts: cd.usuarios.map(u => [u.id, u.nome]) },
+      { k: 'classeId', l: 'Classe', t: 'select', num: 1, opts: cd.classes.map(c => [c.id, c.nome]) },
+      { k: 'subclasseId', l: 'Subclasse (depende da classe)', t: 'select', num: 1, opts: [] },
+      { k: 'tag', l: 'Tag (estabelecimento)', t: 'text', list: 'dl-tag' }, { k: 'nota', l: 'Tag manual', t: 'text', list: 'dl-nota' },
+      { k: 'status', l: 'Status', t: 'select', opts: ['Realizado', 'Previsto'] }];
+    modal({ titulo: 'Alterar ' + ids.size + ' lançamento(s) em lote', campos, valores: {},
+      extra: '<span class="lbl" style="margin-right:auto;max-width:300px">Campos em branco não são alterados.</span>',
+      depois: { init: d => {
+        const cl = d.querySelector('[name=classeId]'), sb = d.querySelector('[name=subclasseId]');
+        const sync = () => { const id = +cl.value || null; sb.innerHTML = '<option value=""></option>' + ordNome(cd.subclasses.filter(s => s.classeId === id)).map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join(''); sb.disabled = !id; };
+        cl.onchange = sync; sync();
+      } },
+      salvar: o => {
+        if (o.subclasseId && !o.classeId) return ['Para mudar a subclasse, escolha também a classe.'];
+        if (o.classeId && !o.subclasseId) return ['Ao mudar a classe, escolha a subclasse.'];
+        if (!Object.values(o).some(x => x != null && x !== '')) return ['Preencha ao menos um campo.'];
+        const alvo = db().lancamentos.filter(l => ids.has(l.id)), novos = [], erros = [];
+        alvo.forEach(l => {
+          const n = { ...l };
+          ['contaId', 'quemId', 'classeId', 'subclasseId', 'status'].forEach(k => { if (o[k] != null && o[k] !== '') n[k] = o[k]; });
+          if (o.tag) n.tag = o.tag; if (o.nota) n.nota = o.nota;
+          if (o.quemId && (db()._ix.usuarios.get(o.quemId) || {}).tipo !== 'Grupo') n.pctU1 = null;
+          const e = C.validarLancamento(db(), n); if (e.length) erros.push('#' + l.id + ': ' + e[0]); else novos.push([l, n]);
+        });
+        if (erros.length) return ['Nada foi alterado. ' + erros.length + ' lançamento(s) ficariam inválidos:'].concat(erros.slice(0, 5));
+        novos.forEach(([l, n]) => Object.assign(l, n)); anosDeIds(ids).forEach(y => sujar('lan:' + y)); render(); toast(novos.length + ' lançamento(s) alterado(s)'); return [];
+      } });
+  }
   function exportarLancamentos() {
     const ls = listaLan(), u = S.visao !== 'todos';
     const colunas = [{ t: 'ID', k: 'id', tipo: 'num', w: 8 }, { t: 'Data', k: 'data', tipo: 'data', w: 12 }, { t: 'Identificação', k: 'ident', w: 36 }, { t: 'Descrição', k: 'descricao', w: 46 }, { t: 'Tag', k: 'tag', w: 24 }, { t: 'Tag manual', k: 'nota', w: 24 }, { t: 'Conta', k: 'conta', w: 20 }, { t: 'Quem', k: 'quem', w: 12 }, { t: 'Classe', k: 'classe', w: 18 }, { t: 'Subclasse', k: 'sub', w: 22 }, { t: 'Valor', k: 'valor', tipo: 'brl', w: 14 }].concat(u ? [{ t: 'Parte (' + (db().cadastros.usuarios.find(x => x.id === S.visao) || {}).nome + ')', k: 'parte', tipo: 'brl', w: 16 }] : []).concat([{ t: 'Status', k: 'status', w: 11 }, { t: 'FITID', k: 'fitid', w: 30 }, { t: 'Arquivo', k: 'arquivo', w: 30 }]);
@@ -1809,6 +2162,37 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
         const pid = Math.min(l.id, x.id); l.parId = pid; x.parId = pid;
         const sid = +sel.value, s = sid && D.cadastros.subclasses.find(z => z.id === sid); if (s) [l, x].forEach(z => { z.classeId = s.classeId; z.subclasseId = s.id; });
         salvarAnos(l, x); d.close(); render(); toast('Par vinculado' + (s ? ' e classificado como ' + s.nome : ''));
+      }
+    };
+    d.showModal();
+  }
+
+  /* sugestão de pares em lote: lista saída × entrada de valor oposto; pré-marca só os pares únicos (sem concorrente) a até 5 dias */
+  function abrirParesLote() {
+    const D = db(), d = $('#dlg'), sug = C.sugerirPares(D), MAX = 300, vis = sug.slice(0, MAX);
+    const tipoDe = x => C.tipoClasse(D, x), ehT = x => ['Registro', 'Investimento'].includes(tipoDe(x));
+    const subsReg = ordNome(D.cadastros.subclasses.filter(s => { const k = D._ix.classes.get(s.classeId); return k && k.tipo === 'Registro'; }));
+    const lado = x => `<td style="white-space:nowrap">${C.dataBR(x.data)}</td><td>${esc(C.ident(x))}<div class="lbl">${esc(cNome(x.contaId))}${x.status === 'Previsto' ? ' · Previsto' : ''}</div></td><td class="r">${money(x.valor)}</td>`;
+    const linhas = vis.map((p, i) => `<tr><td><input type="checkbox" name="pl" value="${i}" ${p.marcado ? 'checked' : ''}></td>${lado(p.saida)}${lado(p.entrada)}<td>${p.dias}d</td><td>${p.unico ? '<span class="badge">única</span>' : '<span class="badge" style="background:#F2C66B;color:#222">ambígua</span>'}</td></tr>`).join('');
+    const corpo = sug.length ? `<div class="lbl" style="margin-bottom:6px">${sug.length} par(es) possível(is) — valor oposto (±R$ 0,05), contas diferentes, até 20 dias, ainda sem par. Vêm marcados só os pares <b>únicos</b> a até 5 dias; “ambígua” = há outro candidato para o mesmo lançamento, confira antes de marcar.${sug.length > MAX ? ' Mostrando os ' + MAX + ' primeiros.' : ''}</div>
+      <div class="tools"><button type="button" class="btn alt sm" data-p="todos">Marcar todos</button><button type="button" class="btn alt sm" data-p="unicos">Só únicos</button><button type="button" class="btn alt sm" data-p="nenhum">Limpar</button><span class="lbl" id="plcont"></span></div>
+      <table><tr><th></th><th>Data</th><th>Saída</th><th class="r">Valor</th><th>Data</th><th>Entrada</th><th class="r">Valor</th><th>Dif.</th><th></th></tr>${linhas}</table>
+      <label style="display:block;margin-top:10px">Classificar como (só os pares em que algum lado não é transferência; transferência não é receita nem despesa)<select name="parsub"><option value="">Manter a classificação atual</option>${subsReg.map((s, i) => `<option value="${s.id}" ${i === 0 ? 'selected' : ''}>${esc(klNome(s.classeId))} › ${esc(s.nome)}</option>`).join('')}</select></label>`
+      : '<div class="empty">Nenhum par possível: procurei saídas e entradas de valor oposto (±R$ 0,05), em contas diferentes, a até 20 dias, ainda sem par.</div>';
+    d.innerHTML = `<form method="dialog"><header>⇄ Sugerir pares de transferência</header><div class="fb"><div class="scroll">${corpo}</div></div><footer><button type="button" class="btn alt" data-p="x">Fechar</button>${sug.length ? '<button type="button" class="btn" data-p="ok">Vincular marcados</button>' : ''}</footer></form>`;
+    const marcados = () => [...d.querySelectorAll('[name=pl]:checked')], cont = () => { const e = d.querySelector('#plcont'); if (e) e.textContent = marcados().length + ' marcado(s)'; };
+    d.onchange = cont; cont();
+    d.onclick = ev => {
+      const b = ev.target.closest('[data-p]'); if (!b) return; const a = b.dataset.p;
+      if (a === 'x') d.close();
+      else if (a === 'todos' || a === 'nenhum' || a === 'unicos') { d.querySelectorAll('[name=pl]').forEach(c => { const p = vis[+c.value]; c.checked = a === 'todos' || (a === 'unicos' && p.unico && p.dias <= 5); }); cont(); }
+      else if (a === 'ok') {
+        const sid = +d.querySelector('[name=parsub]').value, s = sid && D.cadastros.subclasses.find(z => z.id === sid), anos = new Set(); let n = 0, cl = 0;
+        marcados().forEach(c => { const p = vis[+c.value], x = p.saida, y = p.entrada; if (x.parId || y.parId) return;
+          const pid = Math.min(x.id, y.id); x.parId = pid; y.parId = pid; n++; anos.add(x.data.slice(0, 4)); anos.add(y.data.slice(0, 4));
+          if (s && !(ehT(x) && ehT(y))) { [x, y].forEach(z => { z.classeId = s.classeId; z.subclasseId = s.id; }); cl++; } });
+        if (!n) { toast('Nada marcado'); return; }
+        anos.forEach(a => sujar('lan:' + a)); d.close(); render(); toast(n + ' par(es) vinculado(s)' + (cl ? ' · ' + cl + ' classificado(s) como ' + s.nome : ''));
       }
     };
     d.showModal();
@@ -1926,6 +2310,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
       <label class="lbl" title="Usado na importação quando o histórico não indica o Quem">Responsável padrão na importação<select data-cfg="quemPadrao"><option value="titular" ${(c.quemPadrao || 'titular') === 'titular' ? 'selected' : ''}>Titular da conta</option><option value="todos" ${c.quemPadrao === 'todos' ? 'selected' : ''}>Todos (${esc(c.apelidoGrupo)})</option><option value="nulo" ${c.quemPadrao === 'nulo' ? 'selected' : ''}>Em branco</option></select></label>
       <label class="lbl" style="flex-direction:row;align-items:center;gap:6px;align-self:end"><input type="checkbox" data-cfg="incluirPrevistos" ${c.incluirPrevistos !== false ? 'checked' : ''}> incluir previstos por padrão</label></div>
       <p class="lbl">Os nomes dos usuários ficam em Cadastros › Usuários. Saldos iniciais ficam em Cadastros › Contas.</p></div></div>
+      <div class="card"><h3>Módulos</h3><div class="body"><p class="lbl">Sempre visíveis: Início, Receitas × Despesas, Detalhamento, Planejado × Realizado, Saldos, Lançamentos, Importar, Planejamento, Cadastros e Configurações. Os opcionais desmarcados ficam apagados no menu e não abrem.</p>${[['modBal', esc(nomeBal())], ['modInv', 'Investimentos'], ['modFat', 'Faturas'], ['modPrj', 'Projeção'], ['modMet', 'Metas']].map(([k, n]) => `<label class="lbl" style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-cfg="${k}" ${c[k] !== false ? 'checked' : ''}> ${n}</label>`).join('')}</div></div>
       <div class="card"><h3>Investimentos — subclasses padrão</h3><div class="body">${cfgInvest()}</div></div>
       <div class="card"><h3>Dados</h3><div class="body"><p>${modo}</p><div class="tools">
         ${St.suportaPasta() ? '<button class="btn" data-act="abrirpasta">Abrir outra pasta…</button>' : '<span class="lbl">Este navegador não permite pasta local; use arquivo único (Chrome ou Edge no computador permitem pasta).</span>'}
@@ -1959,13 +2344,14 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   function render() {
     const app = $('#app'); aplicaTema(); setTimeout(ajustaNav, 0);
     if (!db()) { app.innerHTML = welcome(); return; }
+    if (!modOn(MOD_DE[S.tab])) S.tab = 'inicio';   /* módulo opcional desligado */
     /* mantém a posição de rolagem da página e das tabelas internas (ex.: importação) entre renderizações da mesma tela */
     const chave = S.tab + '|' + (S.imp && S.imp.modo || ''), scs = chave === _tabAnt ? [...document.querySelectorAll('.scroll')].map(e => [e.scrollTop, e.scrollLeft]) : []; app.classList.toggle('anim', chave !== _tabAnt); _tabAnt = chave;
     const y = window.scrollY; app.innerHTML = header() + '<main>' + VIEWS[S.tab]() + '</main>' + `<datalist id="dl-tag">${C.listaTags(db()).map(t => `<option value="${esc(t)}">`).join('')}</datalist><datalist id="dl-nota">${C.listaNotas(db()).map(t => `<option value="${esc(t)}">`).join('')}</datalist>`; atualizaChip(); window.scrollTo(0, y);
     if (scs.length) document.querySelectorAll('.scroll').forEach((e, i) => { if (scs[i]) { e.scrollTop = scs[i][0]; e.scrollLeft = scs[i][1]; } });
   }
   /* ---- perfil Leitor: só navegação, filtros e exportação; nada que altere dados ---- */
-  const LEITOR_OK = new Set(['tab', 'visao', 'tema', 'mes', 'mesum', 'msabre', 'mslimpa', 'detmes', 'detClasse', 'detVoltar', 'tog', 'saldoHoje', 'pag', 'cad', 'sort', 'exportar', 'lanxlsx', 'recarregar', 'abrirpasta', 'abrirpastaleitor', 'reabrir', 'reabrirleitor', 'vazia', 'trocar', 'abrircopia', 'apagarcopia',
+  const LEITOR_OK = new Set(['msopt', 'tab', 'visao', 'tema', 'mes', 'mesum', 'msabre', 'mslimpa', 'detmes', 'detClasse', 'detVoltar', 'detRec', 'detNec', 'detLimpa', 'balxlsx', 'tog', 'saldoHoje', 'pag', 'cad', 'sort', 'exportar', 'lanxlsx', 'recarregar', 'abrirpasta', 'abrirpastaleitor', 'reabrir', 'reabrirleitor', 'vazia', 'trocar', 'abrircopia', 'apagarcopia',
     'plmes', 'plmodo', 'plfmes', 'plfmodo', 'plselplano', 'plsub', 'pltabela', 'pltabmodo', 'pltog', 'prjtog', 'facartao', 'fadiag', 'fairfat', 'famesfat', 'invsel', 'invsub']);
   const LEITOR_BIND_NAO = /^(divpct|importar|imp|impx|plano)/;
   const LEITOR_CFG_OK = new Set(['tema']);
@@ -1983,16 +2369,20 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   }, true);
   document.addEventListener('click', ev => {
     const el = ev.target.closest('[data-act]'); if (!el) return; const a = el.dataset.act, v = el.dataset.v;
-    if (a === 'tab') { S.tab = v; render(); window.scrollTo(0, 0); }
+    if (a === 'tab') { if (!modOn(MOD_DE[v])) return; S.tab = v; render(); window.scrollTo(0, 0); }
     else if (a === 'visao') { S.visao = v; render(); }
-    else if (a === 'mes') { S.mes = +v ? togg(S.mes, +v) : []; S.tab = 'rd'; render(); }
+    else if (a === 'mes') { S.mes = +v ? pick(S.mes, +v, ev) : []; S.tab = 'rd'; render(); }
     else if (a === 'mesum') { S.mes = [+v]; S.tab = 'rd'; render(); }
-    else if (a === 'detmes') { S.mes = +v ? togg(S.mes, +v) : []; render(); }
+    else if (a === 'detmes') { S.mes = +v ? pick(S.mes, +v, ev) : []; render(); }
     else if (a === 'detClasse') { S.det.classe = +v; render(); }
     else if (a === 'detVoltar') { S.det.classe = 0; render(); }
+    else if (a === 'detRec') { S.det.rec = S.det.rec === v ? null : v; render(); }
+    else if (a === 'detNec') { S.det.nec = S.det.nec === v ? null : v; render(); }
+    else if (a === 'detLimpa') { S.det.rec = null; S.det.nec = null; render(); }
     else if (a === 'tog') { const k = el.dataset.k; S.aberto.has(k) ? S.aberto.delete(k) : S.aberto.add(k); render(); }
     else if (a === 'saldoHoje') { S.saldoAte = C.hoje(); render(); }
     else if (a === 'novo') abrirLan(null);
+    else if (a === 'paresLote') abrirParesLote();
     else if (a === 'edit') abrirLan(+el.dataset.id);
     else if (a === 'pag') { S.lan.pag += +v; render(); }
     else if (a === 'cad') { S.cad = v; S.sort.cad = { c: null, d: 1 }; render(); }
@@ -2009,6 +2399,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
     else if (a === 'reabrirleitor') acaoReabrir(true);
     else if (a === 'vazia') { St.dir = null; St.leitor = false; iniciar(C.dbVazio()); S.tab = 'cad'; render(); }
     else if (a === 'exportar') exportarBackup();
+    else if (a === 'balxlsx') exportarBalanco();
     else if (a === 'salvaragora') { ['config', 'cadastros', 'planos', 'metas', 'ativos', 'imp'].forEach(k => S.sujos.add(k)); [...new Set(db().lancamentos.map(l => 'lan:' + l.data.slice(0, 4)))].forEach(k => S.sujos.add(k)); persistir(); toast('Base salva'); }
     else if (a === 'tema') { db().config.tema = v; try { localStorage.setItem('prumo-tema', v); } catch (e) { } sujar('config'); render(); }
     else if (a === 'recarregar') abrirDir(St.dir);
@@ -2016,7 +2407,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   document.addEventListener('change', ev => {
     const el = ev.target; if (el.dataset.cfg) {
       const k = el.dataset.cfg; let x = el.type === 'checkbox' ? el.checked : el.value; if (el.dataset.t === 'pct') x = parseFloat(x) / 100; else if (el.dataset.t === 'int') x = parseInt(x, 10) || 0; else if (el.dataset.t === 'id') x = el.value === '' ? null : +el.value;
-      db().config[k] = x; sujar('config'); if (k === 'tema') { try { localStorage.setItem('prumo-tema', x); } catch (e) { } } if (['tema', 'apelidoGrupo', 'nomeVisaoTodos', 'lembreteBackupDias', 'invSubRendimento', 'invSubImposto', 'invSubTransf'].includes(k)) render(); return;
+      db().config[k] = x; sujar('config'); if (k === 'tema') { try { localStorage.setItem('prumo-tema', x); } catch (e) { } } if (['tema', 'apelidoGrupo', 'nomeVisaoTodos', 'lembreteBackupDias', 'invSubRendimento', 'invSubImposto', 'invSubTransf', 'modBal', 'modInv', 'modFat', 'modPrj', 'modMet'].includes(k)) render(); return;
     }
     const b = el.dataset.bind; if (b === 'lanq' && S.lan.q === el.value) return;   /* já aplicado ao digitar (evento input) */
     if (!b || /^(fat|prj|met|inv|msx)/.test(b) || ((b.startsWith('imp') && b !== 'importar' && b !== 'importarleitor') || b.startsWith('pl') && b !== 'plano')) return;
@@ -2080,12 +2471,17 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   /* ---------- seleção múltipla (mês, conta, classe, subclasse) ---------- */
   /* vazio = tudo; um item = só ele; vários = qualquer um deles (ver Core.emSel). O painel fica aberto entre renderizações (S.ms.aberto). */
   S.ms = { aberto: null };
+  const coarse = () => { try { return matchMedia('(pointer:coarse)').matches; } catch (e) { return false; } };   /* toque: não há Ctrl, então alterna */
+  const multi = ev => !!(ev && (ev.ctrlKey || ev.metaKey)) || coarse();
+  /* sem Ctrl a escolha vira só o item clicado (clicar de novo no único selecionado limpa); com Ctrl soma/retira */
+  const pick = (arr, v, ev) => multi(ev) ? togg(arr, v) : (arr.length === 1 && arr[0] === v ? [] : [v]);
   const togg = (arr, v) => (arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v]).sort((x, y) => x - y);
   const MS = {
     rdconta: { get: () => S.conta, set: v => { S.conta = v; } },
     lanmes: { get: () => S.lan.mes, set: v => { S.lan.mes = v; S.lan.pag = 0; } },
     lanconta: { get: () => S.lan.conta, set: v => { S.lan.conta = v; S.lan.pag = 0; } },
-    lanclasse: { get: () => S.lan.classe, set: v => { S.lan.classe = v; S.lan.pag = 0; } },
+    lanclasse: { get: () => S.lan.classe, set: v => { S.lan.classe = v; S.lan.pag = 0; S.lan.sub = S.lan.sub.filter(id => !v.length || db().cadastros.subclasses.some(s => s.id === id && v.includes(s.classeId))); } },
+    lansub: { get: () => S.lan.sub, set: v => { S.lan.sub = v; S.lan.pag = 0; } },
     plclasse: { get: () => S.pl.classe, set: v => { S.pl.classe = v; } },
     fatclasse: { get: () => S.fa.classe, set: v => { S.fa.classe = v; S.fa.sub = S.fa.sub.filter(id => !v.length || db().cadastros.subclasses.some(s => s.id === id && v.includes(s.classeId))); } },
     fatsub: { get: () => S.fa.sub, set: v => { S.fa.sub = v; } }
@@ -2093,14 +2489,15 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   function msel(key, todos, opts) {
     const sel = MS[key].get(), aberto = S.ms.aberto === key;
     const rot = !sel.length ? todos : sel.length === 1 ? (opts.find(o => o[0] === sel[0]) || [0, '?'])[1] : sel.length + ' selecionados';
-    return `<span class="ms" data-ms="${key}"><button type="button" class="msb ${sel.length ? 'on' : ''}" data-act="msabre" data-k="${key}">${esc(rot)} ▾</button>${aberto ? `<div class="msp">${opts.map(([id, l]) => `<label class="mso"><input type="checkbox" data-bind="msx" data-k="${key}" value="${id}" ${sel.includes(id) ? 'checked' : ''}> ${esc(l)}</label>`).join('')}<div class="msf"><button type="button" class="btn alt sm" data-act="mslimpa" data-k="${key}">Limpar seleção</button></div></div>` : ''}</span>`;
+    return `<span class="ms" data-ms="${key}"><button type="button" class="msb ${sel.length ? 'on' : ''}" data-act="msabre" data-k="${key}">${esc(rot)} ▾</button>${aberto ? `<div class="msp">${coarse() ? '' : '<div class="lbl" style="padding:2px 8px">Ctrl + clique para escolher vários</div>'}${opts.map(([id, l]) => `<label class="mso" data-act="msopt" data-k="${key}" data-v="${id}"><input type="checkbox" data-bind="msx" data-k="${key}" value="${id}" ${sel.includes(id) ? 'checked' : ''}> ${esc(l)}</label>`).join('')}<div class="msf"><button type="button" class="btn alt sm" data-act="mslimpa" data-k="${key}">Limpar seleção</button></div></div>` : ''}</span>`;
   }
   const mesesTxt = sel => sel.length <= 2 ? sel.map(m => C.MESES[m - 1]).join(' e ') : sel.map(m => C.MESES[m - 1].slice(0, 3)).join(', ');
-  const chipsMes = (act, sel) => `<div class="mchips"><button data-act="${act}" data-v="0" class="${!sel.length ? 'on' : ''}">Ano todo</button>${C.MESES.map((n, i) => `<button data-act="${act}" data-v="${i + 1}" class="${sel.includes(i + 1) ? 'on' : ''}" title="Clique em vários meses para somá-los">${n}</button>`).join('')}</div>`;
+  const chipsMes = (act, sel) => `<div class="mchips"><button data-act="${act}" data-v="0" class="${!sel.length ? 'on' : ''}">Ano todo</button>${C.MESES.map((n, i) => `<button data-act="${act}" data-v="${i + 1}" class="${sel.includes(i + 1) ? 'on' : ''}" title="Segure Ctrl e clique para somar vários meses">${n}</button>`).join('')}</div>`;
   const somaMeses = (meses, sel) => { const s = { rec: 0, des: 0 }; sel.forEach(m => { s.rec += meses[m - 1].rec; s.des += meses[m - 1].des; }); s.rec = C.r2(s.rec); s.des = C.r2(s.des); s.saldo = C.r2(s.rec - s.des); return s; };
   document.addEventListener('click', ev => {
     const el = ev.target.closest('[data-act]');
     if (el && el.dataset.act === 'msabre') { S.ms.aberto = S.ms.aberto === el.dataset.k ? null : el.dataset.k; render(); return; }
+    if (el && el.dataset.act === 'msopt') { ev.preventDefault(); const m = MS[el.dataset.k], id = isNaN(+el.dataset.v) ? el.dataset.v : +el.dataset.v; m.set(pick(m.get(), id, ev)); render(); return; }
     if (el && el.dataset.act === 'mslimpa') { MS[el.dataset.k].set([]); render(); return; }
     if (S.ms.aberto && !ev.target.closest('.ms')) { S.ms.aberto = null; render(); }   /* clique fora fecha o painel */
   });
@@ -2116,7 +2513,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   const buscaOk = (r, q) => { const n = Imp.norm(q); return !n || [r.descricao, r.tag, r.nota].some(x => Imp.norm(x || '').includes(n)); };
   const NVO = { 'Sem histórico': 0, 'Baixa': 1, 'Média': 2, 'Alta': 3 };
   const accImp = { acao: r => r.acao, data: r => r.data, descricao: r => r.descricao, valor: r => r.valor, conta: r => r.contaId ? cNome(r.contaId) : null, conf: r => NVO[r.nivel], tag: r => r.tag || null, nota: r => r.nota || null, quem: r => r.quemId ? uNome(r.quemId) : null, classe: r => r.classeId ? klNome(r.classeId) : null, sub: r => r.subclasseId ? sbNome(r.subclasseId) : null, pend: r => Imp.pendencia(db(), r) || 'ok' };
-  const ST_CLASS = { 'Novo': 'b-real', 'Nova parcela': 'b-real', 'Duplicado no fluxo': 'b-mut', 'Duplicado no lote': 'b-mut', 'Possível duplicado': 'b-prev', 'Valor/data coincidem': 'b-prev', 'Conta não definida': 'b-bad' };
+  const ST_CLASS = { 'Novo': 'b-real', 'Nova parcela': 'b-real', 'Duplicado no fluxo': 'b-mut', 'Duplicado no lote': 'b-mut', 'Possível duplicado': 'b-prev', 'Valor/data coincidem': 'b-prev', 'Conta não definida': 'b-bad', 'Pagamento da fatura': 'b-mut' };
   const NV_CLASS = { 'Alta': 'b-real', 'Média': 'b-prev', 'Baixa': 'b-bad', 'Sem histórico': 'b-mut' };
   const chaveEdit = r => [r.arquivo, r.fitid, r.dataOfx, r.valor, r.descricao].join('|');
 
@@ -2125,14 +2522,46 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
     I.rows = Imp.analisar(db(), I.itens.filter(it => it.contaId || true));
     I.rows.forEach(r => { const g = guard.get(chaveEdit(r)); if (g) { ['acao', 'validado', 'quemId', 'classeId', 'subclasseId', 'tag', 'nota', 'ativoId', 'rendimento', 'tocado'].forEach(k => { r[k] = g[k]; }); if (r.acao === 'Conciliar' && !r.alvoId) r.acao = 'Revisar'; } });
   }
+  /* pdf.js: no index.html local vem embutido (gzip+base64, inerte até o 1º PDF); no app publicado (https) é baixado de vendor/ só nesse momento */
+  let _pdfLib = null;
+  async function textoLib(id, arq) {
+    const el = document.getElementById(id);
+    if (el) {
+      if (el.dataset.enc !== 'gzip-base64') return el.textContent;
+      if (typeof DecompressionStream === 'undefined') throw new Error('este navegador não descompacta o leitor de PDF; use o Chrome ou o Edge atualizado');
+      const bin = Uint8Array.from(atob(el.textContent.trim()), c => c.charCodeAt(0));
+      return await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    }
+    let r; try { r = await fetch('vendor/' + arq); } catch (e) { r = null; }
+    if (!r || !r.ok) throw new Error('o leitor de PDF não está disponível nesta versão');
+    return await r.text();
+  }
+  async function pdfLib() {
+    if (_pdfLib) return _pdfLib;
+    if (typeof demoCarregar === 'function') throw new Error('na demonstração a leitura de PDF não está ativa (só as telas e botões)');
+    if (!window.pdfjsLib) { const s = document.createElement('script'); s.textContent = await textoLib('pdfjs-lib', 'pdf.min.js'); document.head.appendChild(s); }
+    const w = await textoLib('pdfjs-worker', 'pdf.worker.min.js');
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([w], { type: 'text/javascript' }));
+    return (_pdfLib = window.pdfjsLib);
+  }
+  /* bancos/modelos de fatura em PDF que já têm regra definida (PrumoPdf.MODELOS) */
+  function modelosPdfHtml() {
+    const cor = { 'Funcional': 'b-real', 'Parcial': 'b-prev' };
+    return `<div class="card" style="margin-top:12px"><h3>Modelos de PDF com regra definida</h3><div class="scroll" style="max-height:none"><table><tr><th>Banco</th><th>Modelo</th><th>Situação</th><th class="n">Amostras</th><th>Como é reconhecido</th><th>O que faz</th></tr>${PrumoPdf.MODELOS.map(m => `<tr><td><b>${esc(m.banco)}</b></td><td>${esc(m.modelo)}</td><td><span class="badge ${cor[m.status] || 'b-mut'}">${esc(m.status)}</span></td><td class="n">${m.amostras}</td><td>${esc(m.ident)}</td><td>${esc(m.extras)}</td></tr>`).join('')}</table></div>
+      <div class="lbl" style="padding:6px 12px">Outro banco ou outro layout? O arquivo é recusado com aviso. Para criar a regra, envie uma amostra (com os dados pessoais ocultos). <b>Funcional</b> = testado com as amostras e com o total conferido; <b>Parcial</b> = há trechos sem amostra.</div></div>`;
+  }
   async function carregarArquivos(files) {
     const I = S.imp; let novos = 0;
     for (const f of files) {
       if (I.itens.some(it => it.ofx.arquivo === f.name)) { toast('Arquivo já carregado: ' + f.name); continue; }
       try {
-        const arq = Imp.parseOFX(Imp.decodificar(await f.arrayBuffer()), f.name);
-        if (!arq.linhas.length) { toast('Nenhum lançamento em ' + f.name, 4000); continue; }
-        const c = Imp.acharConta(db(), arq); I.itens.push({ ofx: arq, contaId: c ? c.id : null, mesRef: null }); novos++;
+        let arq;
+        if (/\.pdf$/i.test(f.name)) {
+          const pags = await PrumoPdf.extrair(await pdfLib(), await f.arrayBuffer()); arq = PrumoPdf.parse(pags, f.name);
+          if (!arq) { toast('Modelo de PDF não reconhecido: ' + f.name + '. Veja os modelos com regra definida na aba "Fatura em PDF".', 6500); continue; }
+        } else arq = Imp.parseOFX(Imp.decodificar(await f.arrayBuffer()), f.name);
+        if (!arq.linhas.length) { toast('Nenhum lançamento em ' + f.name + (arq.avisos && arq.avisos[0] ? ' — ' + arq.avisos[0] : ''), 5000); continue; }
+        const c = arq.origem === 'PDF' ? PrumoPdf.acharConta(db(), arq) : Imp.acharConta(db(), arq); I.itens.push({ ofx: arq, contaId: c ? c.id : null, mesRef: null }); novos++;
       } catch (e) { toast('Não consegui ler ' + f.name + ': ' + e.message, 5000); }
     }
     if (novos) { I.ultimo = null; reanalisar(); I.filtro = 'revisar'; render(); }
@@ -2176,9 +2605,13 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
     const I = S.imp, d = db(); const log = d.importacoes || [];
     const ult = [...log].reverse().find(x => !x.desfeita);
     const logHtml = `<div class="card" style="margin-top:12px"><h3>Últimas importações</h3><div class="body">${log.length ? `<table>${[...log].reverse().slice(0, 8).map(x => `<tr><td>${new Date(x.em).toLocaleString('pt-BR')}</td><td>${esc((x.arquivos || []).join(', '))}</td><td class="n">${x.criados.length} incluídos · ${x.conciliados.length} conciliados · ${x.previstas.length} previstos · ${x.ignorados} ignorados</td><td class="n">${x.desfeita ? '<span class="lbl">desfeita</span>' : (ult && ult.id === x.id ? `<button class="btn red sm" data-act="impdesfazer">Desfazer</button>` : '')}</td></tr>`).join('')}</table>` : '<div class="lbl">Nenhuma importação feita ainda.</div>'}</div></div>`;
-    const zona = `<label class="drop" id="drop">Arraste os arquivos <b>.ofx</b> aqui ou clique para escolher<input type="file" multiple accept=".ofx,.OFX,.txt" hidden data-bind="impfiles"></label>`;
+    const pdfm = I.modo === 'pdf';
+    const zona = pdfm ? `<label class="drop" id="drop">Arraste as faturas em <b>.pdf</b> aqui ou clique para escolher<input type="file" multiple accept=".pdf,.PDF,application/pdf" hidden data-bind="impfiles"></label>`
+      : `<label class="drop" id="drop">Arraste os arquivos <b>.ofx</b> aqui ou clique para escolher<input type="file" multiple accept=".ofx,.OFX,.txt" hidden data-bind="impfiles"></label>`;
+    const avisosPdf = I.itens.filter(it => it.ofx.avisos && it.ofx.avisos.length).map(it => `<div class="note" style="margin-top:8px"><b>${esc(it.ofx.arquivo)}</b>: ${it.ofx.avisos.map(esc).join(' · ')}</div>`).join('');
     if (!I.itens.length) return `<h1>Importar extratos</h1>${zona}${I.ultimo ? `<div class="note" style="margin-top:10px">Importação concluída: <b>${I.ultimo.criados.length}</b> incluídos, <b>${I.ultimo.conciliados.length}</b> conciliados, <b>${I.ultimo.previstas.length}</b> parcelas futuras previstas, ${I.ultimo.ignorados} ignorados.</div>` : ''}
-      ${nota('Como funciona: o Prumo lê o OFX, reconhece a conta, marca o que já existe (duplicidades), sugere Quem/Classe/Subclasse pelo seu histórico com um grau de confiança e confere o saldo do extrato. Você só valida o que não for de confiança alta.')}${logHtml}`;
+      ${pdfm ? nota('Fatura em PDF: o Prumo lê o texto do PDF, reconhece o modelo (banco/layout), confere o total das linhas com o total impresso, marca duplicidades (mesma conta, mesmo valor e data ±1 dia, com a similaridade da descrição como confiança) e sugere Quem/Classe/Subclasse pelo seu histórico. O pagamento da fatura entra como entrada no cartão e é vinculado em par à saída da conta corrente, quando ela já está na base. O arquivo é lido só no seu navegador.') + modelosPdfHtml() : ''}
+      ${pdfm ? '' : nota('Como funciona: o Prumo lê o OFX, reconhece a conta, marca o que já existe (duplicidades), sugere Quem/Classe/Subclasse pelo seu histórico com um grau de confiança e confere o saldo do extrato. Você só valida o que não for de confiança alta.')}${logHtml}`;
     const rows = I.rows; const n = f => rows.filter(f).length;
     const nNovos = n(r => r.acao === 'Incluir'), nConc = n(r => r.acao === 'Conciliar'), nIgn = n(r => r.acao === 'Ignorar'), nRev = n(r => r.acao === 'Revisar');
     const pend = rows.filter(r => r.acao !== 'Ignorar' && Imp.pendencia(d, r)).length, semHist = n(r => r.acao === 'Incluir' && r.nivel === 'Sem histórico');
@@ -2194,7 +2627,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
     }).join('');
     return `<h1>Importar extratos</h1>${zona}
       <div class="card" style="margin-top:12px"><h3>Arquivos</h3><div class="scroll" style="max-height:none"><table><tr><th>Arquivo</th><th>Tipo</th><th>Conta</th><th>Mês da fatura</th><th>Período</th><th class="n">Linhas</th><th class="n">Saldo do OFX</th><th>Conferência</th><th></th></tr>${arqs}</table></div></div>
-      <div class="grid g4" style="margin:12px 0"><div class="card kpi"><h3>Incluir</h3><div class="v">${nNovos}</div></div><div class="card kpi"><h3>Conciliar</h3><div class="v">${nConc}</div></div><div class="card kpi"><h3>Ignorar (duplicados)</h3><div class="v">${nIgn}</div></div><div class="card kpi"><h3>Para revisar</h3><div class="v ${nRev || pend ? 'neg' : 'pos'}">${Math.max(nRev, pend)}</div><div class="s">${semHist} sem histórico</div></div></div>
+      ${avisosPdf}<div class="grid g4" style="margin:12px 0"><div class="card kpi"><h3>Incluir</h3><div class="v">${nNovos}</div></div><div class="card kpi"><h3>Conciliar</h3><div class="v">${nConc}</div></div><div class="card kpi"><h3>Ignorar (duplicados)</h3><div class="v">${nIgn}</div></div><div class="card kpi"><h3>Para revisar</h3><div class="v ${nRev || pend ? 'neg' : 'pos'}">${Math.max(nRev, pend)}</div><div class="s">${semHist} sem histórico</div></div></div>
       <div class="tools"><div class="sub-tabs" style="margin:0">${tabs.map(([k, nm]) => `<button data-act="imptab" data-v="${k}" class="${I.filtro === k ? 'on' : ''}">${nm}</button>`).join('')}</div>
         <button class="btn alt sm" data-act="impvalidar">Validar todos de confiança Alta</button>
         <select data-bind="impstatus" title="Filtrar pelo status de duplicidade"><option value="">Todos os status de duplicidade</option>${[...new Set(rows.map(r => r.status))].map(s => `<option value="${esc(s)}" ${I.fstatus === s ? 'selected' : ''}>${esc(s)} (${rows.filter(r => r.status === s).length})</option>`).join('')}</select><input type="search" data-bind="impbusca" placeholder="Filtrar por descrição, tag ou tag manual…" value="${esc(I.busca || '')}" autocomplete="off"><label class="lbl"><input type="checkbox" data-bind="impgerar" ${I.gerar ? 'checked' : ''}> gerar parcelas futuras previstas</label>
@@ -2213,8 +2646,9 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
     if (!confirm('Incluir ' + inc + ' lançamento(s) e conciliar ' + con + '?\n\n' + resumo + '\n\nVocê pode desfazer esta importação depois.')) return;
     const antes = new Set(d.lancamentos.map(l => l.id));
     I.itens.forEach(it => { const c = d._ix.contas.get(it.contaId); if (c && it.ofx.acctId && !c.ofxAcctId) { c.ofxAcctId = it.ofx.acctId; sujar('cadastros'); } });
+    I.itens.forEach(it => { const c = d._ix.contas.get(it.contaId); if (c && it.ofx.origem === 'PDF' && PrumoPdf.aprender(c, it.ofx)) sujar('cadastros'); });
     const log = Imp.aplicar(d, I.rows, { gerarParcelas: I.gerar });
-    const ids = [...log.criados, ...log.previstas, ...log.conciliados.map(c => c.id)]; log.anos = anosDe(ids);
+    const ids = [...log.criados, ...log.previstas, ...log.conciliados.map(c => c.id), ...(log.paresExistentes || [])]; log.anos = anosDe(ids);
     d.importacoes = d.importacoes || []; d.importacoes.push(log);
     sujar('imp', ...log.anos.map(a => 'lan:' + a)); log.conciliados.forEach(c => { const a = c.antes.data.slice(0, 4); if (!log.anos.includes(a)) sujar('lan:' + a); });
     I.ultimo = log; I.itens = []; I.rows = []; I.fstatus = ''; render(); toast('Importação concluída');
@@ -2238,7 +2672,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
     if (b === 'impfiles') { carregarArquivos([...el.files]); el.value = ''; return; }
     if (b === 'impgerar') { I.gerar = el.checked; return; }
     if (b === 'impstatus') { I.fstatus = el.value; render(); return; }
-    if (b === 'impconta') { const it = I.itens[+el.dataset.k]; it.contaId = +el.value || null; const c = db()._ix.contas.get(it.contaId); if (c && it.ofx.acctId && !c.ofxAcctId) { c.ofxAcctId = it.ofx.acctId; sujar('cadastros'); toast('Conta lembrada para os próximos arquivos'); } reanalisar(); render(); return; }
+    if (b === 'impconta') { const it = I.itens[+el.dataset.k]; it.contaId = +el.value || null; const c = db()._ix.contas.get(it.contaId); if (c && it.ofx.acctId && !c.ofxAcctId) { c.ofxAcctId = it.ofx.acctId; sujar('cadastros'); toast('Conta lembrada para os próximos arquivos'); } if (c && it.ofx.origem === 'PDF' && PrumoPdf.aprender(c, it.ofx)) { sujar('cadastros'); toast('Cartão lembrado para os próximos PDFs'); } reanalisar(); render(); return; }
     if (b === 'impmes') { I.itens[+el.dataset.k].mesRef = el.value; reanalisar(); render(); return; }
     if (b === 'improw') {
       const r = I.rows[+el.dataset.i], f = el.dataset.f; r.tocado = true;
@@ -2272,7 +2706,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   const viewOfx = VIEWS.imp;
   VIEWS.imp = function () {
     const m = S.imp.modo || 'ofx';
-    const abas = `<div class="sub-tabs" style="margin:0 0 10px"><button data-act="impxmodo" data-v="ofx" class="${m === 'ofx' ? 'on' : ''}">Extratos OFX</button><button data-act="impxmodo" data-v="excel" class="${m === 'excel' ? 'on' : ''}">Planilha Excel / CSV</button></div>`;
+    const abas = `<div class="sub-tabs" style="margin:0 0 10px"><button data-act="impxmodo" data-v="ofx" class="${m === 'ofx' ? 'on' : ''}">Extratos OFX</button><button data-act="impxmodo" data-v="excel" class="${m === 'excel' ? 'on' : ''}">Planilha Excel / CSV</button><button data-act="impxmodo" data-v="pdf" class="${m === 'pdf' ? 'on' : ''}">Fatura em PDF</button></div>`;
     return abas + (m === 'excel' ? viewExcel() : viewOfx());
   };
 
@@ -2609,7 +3043,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   document.addEventListener('click', ev => {
     const el = ev.target.closest('[data-act]'); if (!el || !el.dataset.act.startsWith('pl')) return; const a = el.dataset.act, v = el.dataset.v; if (el.tagName === 'A') ev.preventDefault();
     if (a === 'plmodo') { S.pl.modo = v; render(); }
-    else if (a === 'plmes') { const antes = S.pl.mes.length; S.pl.mes = +v ? togg(S.pl.mes, +v) : []; S.tab = 'pxr'; render(); if (!antes !== !S.pl.mes.length) window.scrollTo(0, 0); }
+    else if (a === 'plmes') { const antes = S.pl.mes.length; S.pl.mes = +v ? pick(S.pl.mes, +v, ev) : []; S.tab = 'pxr'; render(); if (!antes !== !S.pl.mes.length) window.scrollTo(0, 0); }
     else if (a === 'pltog') { const k = el.dataset.k; S.pl.aberto.has(k) ? S.pl.aberto.delete(k) : S.pl.aberto.add(k); render(); }
     else if (a === 'pltabela') { S.pl.tabela = v; render(); }
     else if (a === 'pltabmodo') { S.pl.tabModo = v; render(); }
@@ -2883,7 +3317,7 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   document.addEventListener('change', ev => { if (ev.target.dataset.bind === 'invenc') { S.inv.encerrados = ev.target.checked; render(); } });
   /* ================= DETALHAMENTO DE GASTOS ================= */
   const Dt = PrumoDetalhe;
-  S.det = { classe: 0 };
+  S.det = { classe: 0, rec: null, nec: null };
   S.sort.det = { c: 'valor', d: -1 };
   const DT_PAL = {
     necessidade: { 'Essencial': '#35A592', 'Importante': '#DFA5CF', 'Supérfluo': '#A64E5C', [Dt.NI]: '#B8B8B8' },
@@ -2894,40 +3328,46 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
   const dtPct = p => (p * 100).toFixed(p < 0.1 && p > 0 ? 1 : 0).replace('.', ',') + '%';
 
   /* rosca SVG; itens: [{id,nome,valor,pct,cor,agrup}]; clicavel: data-act detClasse */
-  function svgRosca(itens, clicavel, paleta, tt) {
+  function svgRosca(itens, clicavel, paleta, tt, ativo) {
     if (!itens.length) return '<div class="lbl" style="padding:30px;text-align:center">Sem despesas no período.</div>';
     const R = 80, r = 48, cx = 100, cy = 100; let a0 = -Math.PI / 2, fat = '';
     const pt = (R_, a) => [cx + R_ * Math.cos(a), cy + R_ * Math.sin(a)];
     itens.forEach((it, i) => {
       const cor = it.cor || (paleta && paleta[it.nome]) || DT_FALLBACK[i % DT_FALLBACK.length], tit = `<title>${esc(it.nome)}: ${C.brl(it.valor, true)} (${dtPct(it.pct)})</title>`;
-      const att = (clicavel && !it.agrup ? ` data-act="detClasse" data-v="${it.id}" style="cursor:pointer"` : '') + ttAttr(tt, it);
+      const att = (clicavel && !it.agrup ? ` data-act="${clicavel}" data-v="${esc(it.id)}" style="cursor:pointer${ativo && it.nome !== ativo ? ';opacity:.3' : ''}"` : '') + ttAttr(tt, it);
       if (it.pct >= 0.9999) { fat += `<circle cx="${cx}" cy="${cy}" r="${(R + r) / 2}" fill="none" stroke="${cor}" stroke-width="${R - r}"${att}>${tit}</circle>`; return; }
       const a1 = a0 + it.pct * 2 * Math.PI, big = it.pct > 0.5 ? 1 : 0, [x0, y0] = pt(R, a0), [x1, y1] = pt(R, a1), [x2, y2] = pt(r, a1), [x3, y3] = pt(r, a0);
       fat += `<path d="M${x0} ${y0} A${R} ${R} 0 ${big} 1 ${x1} ${y1} L${x2} ${y2} A${r} ${r} 0 ${big} 0 ${x3} ${y3} Z" fill="${cor}" stroke="#fff" stroke-width="1"${att}>${tit}</path>`; a0 = a1;
     });
     return `<svg viewBox="0 0 200 200" width="100%" style="max-width:210px">${fat}</svg>`;
   }
-  function legendaRosca(itens, clicavel, paleta, tt) {
-    return `<div class="dt-leg">${itens.map((it, i) => { const cor = it.cor || (paleta && paleta[it.nome]) || DT_FALLBACK[i % DT_FALLBACK.length]; const att = (clicavel && !it.agrup ? ` data-act="detClasse" data-v="${it.id}" style="cursor:pointer"` : '') + ttAttr(tt, it);
+  function legendaRosca(itens, clicavel, paleta, tt, ativo) {
+    return `<div class="dt-leg">${itens.map((it, i) => { const cor = it.cor || (paleta && paleta[it.nome]) || DT_FALLBACK[i % DT_FALLBACK.length]; const att = (clicavel && !it.agrup ? ` data-act="${clicavel}" data-v="${esc(it.id)}" style="cursor:pointer${ativo && it.nome !== ativo ? ';opacity:.45' : ''}${ativo && it.nome === ativo ? ';font-weight:700;background:var(--soft)' : ''}"` : '') + ttAttr(tt, it);
       return `<div class="dt-li"${att}><i style="background:${cor}"></i><span>${esc(it.nome)}${it.agrup ? ` <span class="lbl">(${it.qtd})</span>` : ''}</span><b>${dtPct(it.pct)}</b><span class="n lbl">${C.brl(it.valor, true)}</span></div>`; }).join('')}</div>`;
   }
   /* tooltip dos lançamentos: tt = 'K' | 'S' (classe/subclasse) | 'R' | 'N' (recorrência/necessidade); 'Outras' lista as fatias agrupadas */
   const ttAttr = (tt, it) => !tt ? '' : it.agrup ? ` data-tt="O|${it.ids.join(',')}|Despesa|${tt}" data-ctx="det"` : ` data-tt="${tt}|${it.id}|Despesa" data-ctx="det"`;
-  const cartaoRosca = (titulo, g, clicavel, paleta, extra, tt) => `<div class="card"><h3>${titulo}</h3><div class="body dt-rosca">${svgRosca(g.itens, clicavel, paleta, tt)}${legendaRosca(g.itens, clicavel, paleta, tt)}</div>${extra || ''}</div>`;
+  const cartaoRosca = (titulo, g, clicavel, paleta, extra, tt, ativo) => `<div class="card"><h3>${titulo}</h3><div class="body dt-rosca">${svgRosca(g.itens, clicavel, paleta, tt, ativo)}${legendaRosca(g.itens, clicavel, paleta, tt, ativo)}</div>${extra || ''}</div>`;
 
   const dtVar = v => v == null ? '<span class="lbl">—</span>' : `<span class="${v > 0.0005 ? 'neg' : v < -0.0005 ? 'pos' : ''}">${v > 0 ? '▲' : v < 0 ? '▼' : ''} ${(Math.abs(v) * 100).toFixed(0)}%</span>`;
 
   VIEWS.det = function () {
     const f = filtro({ mes: S.mes, contaId: 0 });
-    let r = Dt.calcular(db(), Object.assign({}, f, { classeId: S.det.classe }));
-    if (S.det.classe && !r.sel) { S.det.classe = 0; r = Dt.calcular(db(), Object.assign({}, f, { classeId: 0 })); }
+    const calc = () => Dt.calcular(db(), Object.assign({}, f, { classeId: S.det.classe, recorrencia: S.det.rec, necessidade: S.det.nec }));
+    let r = calc();
+    /* filtro que não existe mais no período/classe: descarta e recalcula */
+    if (S.det.rec && !r.recorrencia.itens.some(i => i.nome === S.det.rec)) { S.det.rec = null; r = calc(); }
+    if (S.det.nec && !r.necessidade.itens.some(i => i.nome === S.det.nec)) { S.det.nec = null; r = calc(); }
+    if (S.det.classe && !r.sel) { S.det.classe = 0; r = calc(); }
     const sel = r.sel, ano = !S.mes.length, varios = S.mes.length > 1, anteriorTxt = varios ? 'período anterior' : ano ? String(r.anterior.ano) : cap(C.MESES[r.anterior.mes - 1].slice(0, 3)) + '/' + String(r.anterior.ano).slice(2);
     const chips = chipsMes('detmes', S.mes);
     const periodo = ano ? S.ano : (varios ? mesesTxt(S.mes) : cap(C.MESES[S.mes[0] - 1])) + '/' + S.ano;
+    const fx = [S.det.rec ? 'Recorrência = <b>' + esc(S.det.rec) + '</b>' : '', S.det.nec ? 'Necessidade = <b>' + esc(S.det.nec) + '</b>' : ''].filter(Boolean);
+    const filtros = fx.length ? `<div class="tools"><span class="lbl">Filtro cruzado: ${fx.join(' · ')} — KPIs, rosca principal e tabela mostram só esses gastos. Clique de novo na fatia para remover.</span> <button class="btn alt sm" data-act="detLimpa">Limpar filtros</button></div>` : '';
     const voltar = sel ? `<div class="tools"><button class="btn" data-act="detVoltar">← Todas as classes</button> <span class="lbl">Detalhando <b>${esc(sel.nome)}</b> — a rosca principal mostra as subclasses; Recorrência e Necessidade consideram só esta classe.</span></div>` : '';
     const kpis = `<div class="grid g4">${kpi('Despesas — ' + periodo, sel ? sel.valor : r.total, sel ? esc(sel.nome) + ' · ' + dtPct(r.total > 0 ? sel.valor / r.total : 0) + ' do total' : 'todas as classes', false).replace('class="v "', 'class="v neg"')}${kpi('Período anterior (' + anteriorTxt + ')', sel ? sel.anterior : r.totalAnterior, '', false)}${ano && r.meses ? kpi('Média por mês', C.r2((sel ? sel.valor : r.total) / r.meses), 'em ' + r.meses + ' mês(es) com despesa', false) : ''}</div>`;
     const aviso = r.reembolsos < 0 ? nota('Reembolsos abatidos das despesas: ' + C.brl(-r.reembolsos, true) + '. As roscas mostram só os valores positivos; a tabela traz o líquido.') : '';
-    const principal = cartaoRosca(sel ? 'Despesas por Subclasse — ' + esc(sel.nome) : 'Despesas por Classe', r.principal, !sel, null, `<div class="lbl" style="padding:0 12px 8px">Fatias abaixo de 3% ficam em “Outras”${sel ? '' : '. Clique numa classe para detalhar.'}</div>`, sel ? 'S' : 'K');
+    const principal = cartaoRosca(sel ? 'Despesas por Subclasse — ' + esc(sel.nome) : 'Despesas por Classe', r.principal, sel ? '' : 'detClasse', null, `<div class="lbl" style="padding:0 12px 8px">Fatias abaixo de 3% ficam em “Outras”${sel ? '' : '. Clique numa classe para detalhar.'}</div>`, sel ? 'S' : 'K');
     /* tabela hierárquica */
     const acc = { nome: x => x.nome, valor: x => x.valor, pct: x => x.valor, media: x => x.media, variacao: x => x.variacao };
     const classes = ordena('det', sel ? [sel] : r.classes, acc);
@@ -2939,8 +3379,78 @@ table.mx .fz1{left:170px;min-width:74px}table.mx .fz2{left:244px;min-width:74px}
       return cab + subs;
     }).join('');
     const tabela = `<div class="card"><h3>Despesas no período${sel ? ' — ' + esc(sel.nome) : ''}</h3><div class="scroll"><table><tr>${th('det', 'nome', 'Classe / Subclasse')}${th('det', 'valor', 'Valor', 'n')}${th('det', 'pct', '% do total', 'n')}${ano ? th('det', 'media', 'Média/mês', 'n') : ''}${th('det', 'variacao', 'Var. vs ' + anteriorTxt, 'n')}</tr>${linhas || '<tr><td colspan="5" class="lbl">Sem despesas no período.</td></tr>'}<tr class="tot"><td>Total</td><td class="n">${C.brl(tot, true)}</td><td class="n">${tot > 0 ? '100%' : ''}</td>${ano ? `<td class="n">${r.meses && tot ? C.brl(C.r2(tot / r.meses), true) : ''}</td>` : ''}<td class="n">${dtVar(sel ? sel.variacao : (r.totalAnterior > 0 ? (r.total - r.totalAnterior) / r.totalAnterior : null))}</td></tr></table></div></div>`;
-    return `<h1>Detalhamento de despesas — ${periodo}</h1>${chips}${voltar}${kpis}${aviso}
-      <div class="dt-grid" style="margin-top:12px"><div class="dt-esq">${principal}<div class="grid g2" style="margin-top:12px">${cartaoRosca('Despesas por Recorrência', r.recorrencia, false, DT_PAL.recorrencia, '', 'R')}${cartaoRosca('Despesas por Necessidade', r.necessidade, false, DT_PAL.necessidade, '', 'N')}</div></div><div class="dt-dir">${tabela}</div></div>`;
+    return `<h1>Detalhamento de despesas — ${periodo}</h1>${chips}${filtros}${voltar}${kpis}${aviso}
+      <div class="dt-grid" style="margin-top:12px"><div class="dt-esq">${principal}<div class="grid g2" style="margin-top:12px">${cartaoRosca('Despesas por Recorrência', r.recorrencia, 'detRec', DT_PAL.recorrencia, '', 'R', S.det.rec)}${cartaoRosca('Despesas por Necessidade', r.necessidade, 'detNec', DT_PAL.necessidade, '', 'N', S.det.nec)}</div></div><div class="dt-dir">${tabela}</div></div>`;
+  };
+  /* ================= BALANÇO CASAL ================= */
+  const Ba = PrumoBalanco;
+  const baTxt = v => v > 0.004 ? `${esc(uNome('U2'))} deve ${C.brl(v)} a ${esc(uNome('U1'))}` : v < -0.004 ? `${esc(uNome('U1'))} deve ${C.brl(-v)} a ${esc(uNome('U2'))}` : 'Em dia';
+  const baCor = id => (db()._ix.usuarios.get(id) || {}).cor || '#888';
+  function svgBalanco(ms) {
+    const W = 720, H = 250, L = 58, R = 12, T = 16, Bt = 28, iw = W - L - R, ih = H - T - Bt, bw = iw / 12;
+    const mx = Math.max(1, ...ms.map(m => Math.max(Math.abs(m.saldo), Math.abs(m.acum)))) * 1.1, y = v => T + ih / 2 - (v / mx) * (ih / 2), step = niceStep(mx / 2);
+    let g = '', bars = '', pts = [];
+    for (let tk = -Math.floor(mx / step) * step; tk <= mx; tk += step) g += `<line x1="${L}" x2="${W - R}" y1="${y(tk)}" y2="${y(tk)}" stroke="${tk === 0 ? '#9a9388' : '#e5ded5'}"/><text x="${L - 6}" y="${y(tk) + 4}" font-size="11" text-anchor="end" fill="#7a746b">${kfmt(tk)}</text>`;
+    ms.forEach((m, i) => {
+      const cx = L + bw * i + bw / 2, y0 = y(0), y1 = y(m.saldo), cor = baCor(m.saldo >= 0 ? 'U1' : 'U2');
+      bars += `<text x="${cx}" y="${H - 8}" font-size="11" text-anchor="middle" fill="#7a746b">${C.MESES[i].slice(0, 3)}</text><rect x="${cx - bw * .3}" y="${Math.min(y0, y1)}" width="${bw * .6}" height="${Math.max(1, Math.abs(y1 - y0))}" rx="2" fill="${cor}" opacity=".75"><title>${C.MESES[i]}: ${C.brl(m.saldo)}</title></rect>`;
+      pts.push(`${cx},${y(m.acum)}`);
+    });
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Balanço do Casal por mês">${g}${bars}<polyline points="${pts.join(' ')}" fill="none" stroke="#2b2620" stroke-width="2"/>${pts.map(p => `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="3" fill="#2b2620"/>`).join('')}</svg>
+      <div class="lbl" style="margin-top:4px"><span style="display:inline-block;width:10px;height:10px;background:${baCor('U1')};border-radius:2px;margin:0 4px 0 0"></span>${esc(uNome('U2'))} deve a ${esc(uNome('U1'))} (barra para cima)<span style="display:inline-block;width:10px;height:10px;background:${baCor('U2')};border-radius:2px;margin:0 4px 0 12px"></span>${esc(uNome('U1'))} deve a ${esc(uNome('U2'))} (para baixo) · linha = acumulado do histórico</div>`;
+  }
+  S.sort.bal = { c: 'pago', d: -1 };
+  function dadosBal() {
+    const lin = Ba.calcular(db(), { incluirPrev: S.prev }), ap = String(S.ano);
+    const doAno = lin.filter(m => m.mes.slice(0, 4) === ap), doPer = doAno.filter(m => C.emSel(S.mes, +m.mes.slice(5, 7)));
+    const antes = lin.filter(m => m.mes.slice(0, 4) < ap).reduce((_, m) => m.acum, 0);
+    const tP = Ba.soma(doPer), tA = Ba.soma(doAno), tH = Ba.soma(lin), perTxt = S.mes.length ? mesesTxt(S.mes) + '/' + S.ano : 'Ano todo ' + S.ano;
+    let ac = antes; const ms = C.MESES.map((_, i) => { const m = doAno.find(x => +x.mes.slice(5, 7) === i + 1); if (m) { ac = m.acum; return m; } return { saldo: 0, divDesp: 0, transf: 0, acum: ac, vazio: true }; });
+    return { lin, doAno, doPer, tP, tA, tH, perTxt, ms, ap, cls: Ba.porClasse(db(), { ano: S.ano, mes: S.mes, incluirPrev: S.prev }) };
+  }
+  /* exportar .xlsx: Mês a mês, Composição (período, ano, histórico) e Por classe */
+  function exportarBalanco() {
+    const d = dadosBal(), u1 = uNome('U1'), u2 = uNome('U2'), brl = (t, k, w) => ({ t, k, tipo: 'brl', w: w || 16 });
+    const mm = d.ms.map((m, i) => ({ mes: C.MESES[i], desp: m.vazio ? null : m.divDesp, transf: m.vazio ? null : m.transf, saldo: m.vazio ? null : m.saldo, acum: m.acum, sit: baTxtPlano(m.acum) }));
+    const R = (rot, f) => ({ rot, p: f(d.tP), a: f(d.tA), h: f(d.tH) });
+    const comp = [R(u1 + ' pagou para si', t => t.U1.si), R(u1 + ' pagou para o Casal (total)', t => t.U1.casal), R(u1 + ' pagou para ' + u2, t => t.U1.outro),
+      R(u2 + ' pagou para si', t => t.U2.si), R(u2 + ' pagou para o Casal (total)', t => t.U2.casal), R(u2 + ' pagou para ' + u1, t => t.U2.outro),
+      R(u2 + ' deve a ' + u1 + ' por despesas', t => t.U1.deve), R(u1 + ' deve a ' + u2 + ' por despesas', t => t.U2.deve),
+      R('Transferido de ' + u1 + ' para ' + u2, t => t.U1.env), R('Transferido de ' + u2 + ' para ' + u1, t => t.U2.env), R('Saldo (positivo: ' + u2 + ' deve a ' + u1 + ')', t => t.saldo)];
+    const cl = []; d.cls.slice().sort((a, b) => b.pago - a.pago).forEach(c => { cl.push({ classe: c.nome, sub: '', pago: c.pago, u1: c.u1, u2: c.u2, liq: c.liquido }); c.subs.slice().sort((a, b) => b.pago - a.pago).forEach(s => cl.push({ classe: c.nome, sub: s.nome, pago: s.pago, u1: s.u1, u2: s.u2, liq: s.liquido })); });
+    PrumoXlsx.baixarLivro('Prumo_balanco_casal_' + S.ano + '.xlsx', [
+      { nome: 'Mês a mês ' + S.ano, colunas: [{ t: 'Mês', k: 'mes', w: 14 }, brl('Despesas', 'desp'), brl('Transferências', 'transf'), brl('Saldo do mês', 'saldo'), brl('Acumulado', 'acum'), { t: 'Situação', k: 'sit', w: 36 }], linhas: mm },
+      { nome: 'Composição', colunas: [{ t: '', k: 'rot', w: 44 }, brl(d.perTxt, 'p'), brl(String(S.ano), 'a'), brl('Histórico', 'h')], linhas: comp },
+      { nome: 'Por classe', colunas: [{ t: 'Classe', k: 'classe', w: 22 }, { t: 'Subclasse', k: 'sub', w: 26 }, brl('Pago p/ Casal ou outro', 'pago', 20), brl(u2 + ' deve a ' + u1, 'u1', 18), brl(u1 + ' deve a ' + u2, 'u2', 18), brl('Líquido (+: ' + u2 + ' deve)', 'liq', 20)], linhas: cl }]);
+    toast('Balanço exportado (' + d.perTxt + ')');
+  }
+  const baTxtPlano = v => v > 0.004 ? `${uNome('U2')} deve ${C.brl(v)} a ${uNome('U1')}` : v < -0.004 ? `${uNome('U1')} deve ${C.brl(-v)} a ${uNome('U2')}` : 'Em dia';
+  VIEWS.bal = function () {
+    const { lin, doAno, doPer, tP, tA, tH, perTxt, ms, ap, cls } = dadosBal();
+    const u1 = uNome('U1'), u2 = uNome('U2');
+    const kp = (t, tt) => `<div class="card kpi"><h3 class="ttl2">${t}</h3><div class="v ${Math.abs(tt.saldo) < 0.005 ? 'pos' : ''}" style="font-size:20px">${baTxt(tt.saldo)}</div><div class="s">despesas ${C.brl(tt.divDesp)} · transferências ${C.brl(tt.transf)}</div></div>`;
+    const cab = `<tr><th></th><th class="n">${esc(perTxt)}</th><th class="n">${S.ano}</th><th class="n">Histórico</th></tr>`;
+    const lnh = (rot, f, neg, forte) => `<tr${forte ? ' style="font-weight:700;background:var(--soft)"' : ''}><td${neg ? ' style="padding-left:24px"' : ''}>${rot}</td>${[tP, tA, tH].map(t => `<td class="n">${money(f(t), false)}</td>`).join('')}</tr>`;
+    const quem = (A, Bn, X, Y) => [lnh(`<b>${esc(A)}</b> pagou para si`, t => t[X].si, true), lnh(`para o Casal (total; parte de ${esc(Bn)} abaixo)`, t => t[X].casal, true), lnh(`para ${esc(Bn)}`, t => t[X].outro, true)].join('');
+    const comp = `<div class="card"><h3>Composição</h3><div class="scroll"><table>${cab}
+      ${quem(u1, u2, 'U1')}${quem(u2, u1, 'U2')}
+      ${lnh(`${esc(u2)} deve a ${esc(u1)} por despesas`, t => t.U1.deve)}${lnh(`${esc(u1)} deve a ${esc(u2)} por despesas`, t => t.U2.deve)}
+      ${lnh(`Transferido de ${esc(u1)} para ${esc(u2)}`, t => t.U1.env)}${lnh(`Transferido de ${esc(u2)} para ${esc(u1)}`, t => t.U2.env)}
+      <tr style="font-weight:700;background:var(--soft)"><td>Saldo (positivo: ${esc(u2)} deve a ${esc(u1)})</td>${[tP, tA, tH].map(t => `<td class="n">${money(t.saldo, false)}</td>`).join('')}</tr></table></div>
+      <div class="lbl" style="padding:6px 12px">O saldo do histórico é contínuo (todos os anos) e já desconta as transferências entre as contas dos dois, qualquer que seja o motivo.</div></div>`;
+    const accB = { nome: x => x.nome, pago: x => x.pago, u1: x => x.u1, u2: x => x.u2, liquido: x => x.liquido };
+    const lc = ordena('bal', cls, accB), tc = { pago: 0, u1: 0, u2: 0 }; cls.forEach(c => { tc.pago += c.pago; tc.u1 += c.u1; tc.u2 += c.u2; });
+    const cel = x => `<td class="n">${money(x.pago, false)}</td><td class="n">${money(x.u1, false)}</td><td class="n">${money(x.u2, false)}</td><td class="n"><b>${money(x.liquido, false)}</b></td>`;
+    const linC = lc.map(c => { const k = 'bal:' + c.classeId, ab = S.aberto.has(k);
+      return `<tr class="row" style="background:var(--soft);font-weight:700;cursor:pointer" data-act="tog" data-k="${k}"><td>${ab ? '▾' : '▸'} <span class="aura" style="background:${esc(c.cor || '#8AA6B1')};display:inline-block;width:10px;height:10px;border-radius:3px"></span> ${esc(c.nome)}</td>${cel(c)}</tr>`
+        + (ab ? ordena('bal', c.subs, accB).map(s => `<tr class="row"><td style="padding-left:30px">${esc(s.nome)}</td>${cel(s)}</tr>`).join('') : ''); }).join('');
+    const porClasse = `<div class="card"><h3>Detalhe por classe — ${esc(perTxt)}</h3><div class="scroll"><table><tr>${th('bal', 'nome', 'Classe / Subclasse')}${th('bal', 'pago', 'Pago p/ Casal ou outro', 'n')}${th('bal', 'u1', esc(u2) + ' deve a ' + esc(u1), 'n')}${th('bal', 'u2', esc(u1) + ' deve a ' + esc(u2), 'n')}${th('bal', 'liquido', 'Líquido', 'n')}</tr>${linC || '<tr><td colspan="5" class="lbl">Sem despesas compartilhadas no período.</td></tr>'}
+      ${linC ? `<tr style="font-weight:700;background:var(--soft)"><td>Total</td>${cel({ pago: C.r2(tc.pago), u1: C.r2(tc.u1), u2: C.r2(tc.u2), liquido: C.r2(tc.u1 - tc.u2) })}</tr>` : ''}</table></div><div class="lbl" style="padding:6px 12px">Só despesas (as transferências ficam de fora). “Pago p/ Casal ou outro” = total pago pelo titular nas despesas do Casal ou do outro; líquido positivo = ${esc(u2)} deve a ${esc(u1)}. Clique na classe para ver as subclasses.</div></div>`;
+    const mt = `<div class="card"><h3>Mês a mês — ${S.ano}</h3><div class="scroll"><table><tr><th>Mês</th><th class="n">Despesas</th><th class="n">Transferências</th><th class="n">Saldo do mês</th><th class="n">Acumulado</th><th>Situação</th></tr>
+      ${ms.map((m, i) => `<tr class="row"><td>${C.MESES[i]}</td><td class="n">${m.vazio ? '—' : money(m.divDesp, false)}</td><td class="n">${m.vazio ? '—' : money(m.transf, false)}</td><td class="n">${m.vazio ? '—' : money(m.saldo, false)}</td><td class="n"><b>${money(m.acum, false)}</b></td><td>${baTxt(m.acum)}</td></tr>`).join('')}</table></div></div>`;
+    return `<h1>${esc(nomeBal())}</h1><div class="tools"><button class="btn alt" data-act="balxlsx" style="margin-left:auto">⤓ Exportar para Excel</button></div>${chipsMes('detmes', S.mes)}<div class="grid g4">${kp('Período — ' + esc(perTxt), tP)}${kp('Ano ' + S.ano, tA)}${kp('Histórico (acumulado)', tH)}</div>
+      <div class="card"><h3>Saldo por mês — ${S.ano}</h3>${svgBalanco(ms)}</div>${comp}${porClasse}${mt}
+      ${nota('Quem paga é o titular da conta. Despesa de outra pessoa: ela deve 100%; despesa do Casal: ela deve a sua parte do rateio (lançamento → mês → padrão). Reembolsos abatem pelo sinal. Transferências entre contas dos dois entram sempre no cálculo.' + (S.prev ? ' Inclui lançamentos previstos.' : ''))}`;
   };
   window.Prumo = { S, render, abrirDir, iniciar, VIEWS, atualizarDaPasta, persistir };
   window.addEventListener('DOMContentLoaded', async () => { render(); S.lembrada = St.suportaPasta() ? await St.lembrada() : null; const cp = await St.copiaLer(); S.copiaEm = cp ? cp.em : null; if ((S.lembrada || S.copiaEm) && !db()) render(); });
